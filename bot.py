@@ -12,7 +12,7 @@ import re
 TOKEN = os.environ.get("DISCORD_TOKEN")
 GUILD_ID = os.environ.get("GUILD_ID")  # <-- NEU: deine Server-ID hier als Railway Variable eintragen!
 TIMEZONE = pytz.timezone("Europe/Berlin")
-EMBED_COLOR = 0xF5F5DC  # Beige
+EMBED_COLOR = 0xFFD700  # Gelb
 DATA_FILE = "data.json"
 
 # ─── DATA HANDLER ─────────────────────────────────────────────────────────────
@@ -145,7 +145,7 @@ def build_embed(datum, mitglieder, eingefroren=False):
             inline=False
         )
 
-    embed.set_footer(text="GUERILLA")
+    embed.set_footer(text="ECLIPSE")
     embed.timestamp = datetime.now(TIMEZONE)
     return embed
 
@@ -268,7 +268,7 @@ class AbmeldungModal(discord.ui.Modal, title="Abmeldung"):
                 embed_abm.add_field(name="Von",      value=von,                      inline=True)
                 embed_abm.add_field(name="Bis",      value=bis,                      inline=True)
                 embed_abm.add_field(name="Grund",    value=grund,                    inline=False)
-                embed_abm.set_footer(text="GUERILLA")
+                embed_abm.set_footer(text="ECLIPSE")
                 embed_abm.timestamp = datetime.now(TIMEZONE)
                 await abm_kanal.send(embed=embed_abm)
 
@@ -292,7 +292,7 @@ async def abmeldung_button_posten_intern(guild):
         description="Klick auf den Button unten, um dich abzumelden. Du trägst Name, Zeitraum und Grund ein.",
         color=EMBED_COLOR
     )
-    embed.set_footer(text="GUERILLA")
+    embed.set_footer(text="ECLIPSE")
     view = AbmeldungButtonView()
 
     msg_id = data.get("abmeldung_button_nachricht_id")
@@ -341,7 +341,7 @@ def build_abmeldung_liste_embed(guild):
 
     if not abmeldungen:
         embed.description = "*Aktuell ist niemand abgemeldet.*"
-        embed.set_footer(text="GUERILLA")
+        embed.set_footer(text="ECLIPSE")
         embed.timestamp = datetime.now(TIMEZONE)
         return embed
 
@@ -374,7 +374,7 @@ def build_abmeldung_liste_embed(guild):
         bloecke.append(block)
 
     embed.description = "\n\n━━━━━━━━━━━━━━━━━━━━\n\n".join(bloecke)
-    embed.set_footer(text="GUERILLA")
+    embed.set_footer(text="ECLIPSE")
     embed.timestamp = datetime.now(TIMEZONE)
     return embed
 
@@ -706,7 +706,7 @@ async def abmelden(interaction: discord.Interaction, von: str, bis: str, grund: 
             embed_abm.add_field(name="Von",      value=von,                      inline=True)
             embed_abm.add_field(name="Bis",      value=bis,                      inline=True)
             embed_abm.add_field(name="Grund",    value=grund,                    inline=False)
-            embed_abm.set_footer(text="GUERILLA")
+            embed_abm.set_footer(text="ECLIPSE")
             embed_abm.timestamp = datetime.now(TIMEZONE)
             await abm_kanal.send(embed=embed_abm)
 
@@ -751,7 +751,7 @@ async def abmeldung_langzeit(interaction: discord.Interaction, von: str, bis: st
             embed_abm.add_field(name="Von",      value=von,                      inline=True)
             embed_abm.add_field(name="Bis",      value=bis,                      inline=True)
             embed_abm.add_field(name="Grund",    value=grund,                    inline=False)
-            embed_abm.set_footer(text="GUERILLA")
+            embed_abm.set_footer(text="ECLIPSE")
             embed_abm.timestamp = datetime.now(TIMEZONE)
             await abm_kanal.send(embed=embed_abm)
 
