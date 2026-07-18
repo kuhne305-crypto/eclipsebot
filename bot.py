@@ -34,8 +34,14 @@ def load_data():
         "abmeldung_liste_nachricht_id": None,
         "channel_abmeldung_button": None,
         "abmeldung_button_nachricht_id": None,
-        "aufstellung_wochentage": None,   # None/[] = jeden Tag. Sonst Liste von 0=Montag..6=Sonntag
-        "einfrier_uhrzeit": "21:00"
+        "aufstellung_tage_config": {str(i): {"aktiv": False, "uhrzeit": "20:00"} for i in range(7)},
+        "aktueller_wochentag": None,
+        "channel_verifizierung": None,
+        "verifizierung_nachricht_id": None,
+        "channel_verifizierung_log": None,
+        "rolle_probemitglied_id": None,
+        "channel_probewoche_erinnerung": None,
+        "verifizierungen": {}
     }
 
 def save_data(data):
@@ -80,6 +86,10 @@ def build_embed(datum, mitglieder, eingefroren=False):
     abstimmung  = data.get("abstimmung", {})
     abmeldungen = data.get("abmeldungen", {})
 
+    wochentag   = data.get("aktueller_wochentag")
+    tage_config = data.get("aufstellung_tage_config", {})
+    anzeige_zeit = tage_config.get(str(wochentag), {}).get("uhrzeit", "21:00") if wochentag is not None else "21:00"
+
     ja_liste        = []
     spaeter_liste   = []
     nein_liste      = []
@@ -110,7 +120,7 @@ def build_embed(datum, mitglieder, eingefroren=False):
         title=titel,
         description=(
             f"**{datum}**\n"
-            f"Aufstellung: **{data.get('einfrier_uhrzeit', '21:00')} Uhr**\n"
+            f"Aufstellung: **{anzeige_zeit} Uhr**\n"
             f"{'🔒 Abstimmung geschlossen!' if eingefroren else '✅ Jetzt abstimmen!'}"
         ),
         color=EMBED_COLOR
@@ -308,6 +318,95 @@ async def abmeldung_button_posten_intern(guild):
     data["abmeldung_button_nachricht_id"] = str(msg.id)
     save_data(data)
 
+# ─── VERIFIZIERUNG (IC-Name, Nummer, Probewoche) ─────────────────────────────
+class VerifizierungModal(discord.ui.Modal, title="Verifizierung: IC-Name & Nummer"):
+    ic_name = discord.ui.TextInput(
+        label="Dein In-Character Name", placeholder="Max Mustermann", required=True, max_length=32
+    )
+    ic_nummer = discord.ui.TextInput(
+        label="Deine IC-Telefonnummer", placeholder="Einfach vom Handy kopieren", required=True, max_length=20
+    )
+    geworben_von = discord.ui.TextInput(
+        label="Angeworben von (Optional)", placeholder="Name des Mitglieds das dich angeworben hat",
+        required=False, max_length=32
+    )
+
+    async def on_submit(self, interaction: discord.Interaction):
+        uid = str(interaction.user.id)
+        verifizierungen = data.setdefault("verifizierungen", {})
+        verifizierungen[uid] = {
+            "ic_name": self.ic_name.value.strip(),
+            "ic_nummer": self.ic_nummer.value.strip(),
+            "geworben_von": self.geworben_von.value.strip() if self.geworben_von.value else None,
+            "verifiziert_am": datetime.now(TIMEZONE).isoformat(),
+            "erinnert": False
+        }
+        save_data(data)
+
+        rolle_ok = True
+        rolle_id = data.get("rolle_probemitglied_id")
+        if rolle_id:
+            rolle = interaction.guild.get_role(int(rolle_id))
+            if rolle:
+                try:
+                    await interaction.user.add_roles(rolle)
+                except discord.Forbidden:
+                    rolle_ok = False
+
+        antwort = "✅ Verifizierung abgeschlossen! Deine Probewoche beginnt jetzt."
+        if rolle_id and not rolle_ok:
+            antwort += "\n⚠️ Die Probemitglied-Rolle konnte nicht automatisch vergeben werden (fehlende Berechtigung)."
+        await interaction.response.send_message(antwort, ephemeral=True)
+
+        if data.get("channel_verifizierung_log"):
+            log_kanal = interaction.guild.get_channel(int(data["channel_verifizierung_log"]))
+            if log_kanal:
+                embed = discord.Embed(title="Neue Verifizierung", color=EMBED_COLOR)
+                embed.add_field(name="Discord",   value=interaction.user.mention, inline=True)
+                embed.add_field(name="IC-Name",   value=self.ic_name.value,       inline=True)
+                embed.add_field(name="IC-Nummer", value=self.ic_nummer.value,     inline=True)
+                if self.geworben_von.value:
+                    embed.add_field(name="Angeworben von", value=self.geworben_von.value, inline=True)
+                embed.set_footer(text="ECLIPSE")
+                embed.timestamp = datetime.now(TIMEZONE)
+                await log_kanal.send(embed=embed)
+
+class VerifizierungButtonView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="Verifizieren", style=discord.ButtonStyle.success, custom_id="btn_verifizierung_oeffnen")
+    async def btn_verifizieren(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.send_modal(VerifizierungModal())
+
+async def verifizierung_posten_intern(guild):
+    if not data.get("channel_verifizierung"):
+        return
+    kanal = guild.get_channel(int(data["channel_verifizierung"]))
+    if not kanal:
+        return
+
+    embed = discord.Embed(
+        title="Verifizierung",
+        description="Klicke auf **Verifizieren**, um deinen IC-Namen und deine Nummer einzugeben. Danach beginnt deine Probewoche!",
+        color=EMBED_COLOR
+    )
+    embed.set_footer(text="ECLIPSE")
+    view = VerifizierungButtonView()
+
+    msg_id = data.get("verifizierung_nachricht_id")
+    if msg_id:
+        try:
+            msg = await kanal.fetch_message(int(msg_id))
+            await msg.edit(embed=embed, view=view)
+            return
+        except Exception as e:
+            print(f"Alte Verifizierungs-Nachricht nicht gefunden, poste neu: {e}")
+
+    msg = await kanal.send(embed=embed, view=view)
+    data["verifizierung_nachricht_id"] = str(msg.id)
+    save_data(data)
+
 async def update_nachricht(guild):
     msg_id = data.get("aktuelle_nachricht_id")
     if not msg_id or not data.get("channel_aufstellung"):
@@ -412,9 +511,11 @@ async def neue_abstimmung_posten(guild, manual_channel=None, verwende_heute=Fals
         return
 
     datum = get_heute_datum() if verwende_heute else get_morgen_datum()
-    data["abstimmung"]      = {}
-    data["eingefroren"]     = False
-    data["aktuelles_datum"] = datum
+    ziel_zeitpunkt = datetime.now(TIMEZONE) if verwende_heute else (datetime.now(TIMEZONE) + timedelta(days=1))
+    data["abstimmung"]          = {}
+    data["eingefroren"]         = False
+    data["aktuelles_datum"]     = datum
+    data["aktueller_wochentag"] = ziel_zeitpunkt.weekday()
 
     mitglieder = await get_rolle_mitglieder(guild)
 
@@ -460,6 +561,41 @@ async def abstimmung_einfrieren(guild):
             await archiv.send(embed=embed_archiv)
             print(f"Abstimmung archiviert für {datum}")
 
+# ─── PROBEWOCHE-ERINNERUNG ────────────────────────────────────────────────────
+async def check_probewoche_erinnerungen():
+    if not data.get("channel_probewoche_erinnerung"):
+        return
+    verifizierungen = data.get("verifizierungen", {})
+    if not verifizierungen:
+        return
+
+    now = datetime.now(TIMEZONE)
+    geaendert = False
+    for uid, info in verifizierungen.items():
+        if info.get("erinnert"):
+            continue
+        try:
+            verifiziert_am = datetime.fromisoformat(info["verifiziert_am"])
+        except Exception:
+            continue
+        if now - verifiziert_am >= timedelta(days=7):
+            for guild in bot.guilds:
+                kanal = guild.get_channel(int(data["channel_probewoche_erinnerung"]))
+                if kanal:
+                    try:
+                        await kanal.send(
+                            f"⏰ **Probewoche abgelaufen:** <@{uid}> "
+                            f"(IC-Name: **{info.get('ic_name', '-')}**) hat seine 7-tägige "
+                            f"Probewoche beendet. Bitte prüfen und ggf. befördern."
+                        )
+                    except Exception as e:
+                        print(f"Fehler beim Senden der Probewoche-Erinnerung: {e}")
+            info["erinnert"] = True
+            geaendert = True
+
+    if geaendert:
+        save_data(data)
+
 # ─── TASKS ────────────────────────────────────────────────────────────────────
 @tasks.loop(minutes=1)
 async def check_zeit():
@@ -468,26 +604,29 @@ async def check_zeit():
     heutiger_wochentag  = now.weekday()
     morgiger_wochentag  = (now + timedelta(days=1)).weekday()
 
-    konfigurierte_tage = data.get("aufstellung_wochentage")  # None/[] = jeden Tag
-    einfrier_uhrzeit    = data.get("einfrier_uhrzeit", "21:00")
-    try:
-        einfrier_h, einfrier_m = map(int, einfrier_uhrzeit.split(":"))
-    except Exception:
-        einfrier_h, einfrier_m = 21, 0
+    tage_config = data.get("aufstellung_tage_config", {})
 
-    # Neue Aufstellung um 23:59 posten, nur wenn morgen ein Aufstellungstag ist
+    # Neue Aufstellung um 23:59 posten, nur wenn morgen ein aktivierter Aufstellungstag ist
     if h == 23 and m == 59:
-        if not konfigurierte_tage or morgiger_wochentag in konfigurierte_tage:
+        morgen_eintrag = tage_config.get(str(morgiger_wochentag), {})
+        if morgen_eintrag.get("aktiv"):
             for guild in bot.guilds:
                 await neue_abstimmung_posten(guild)
             await asyncio.sleep(61)
 
-    # Einfrieren zur konfigurierten Uhrzeit, nur wenn heute ein Aufstellungstag ist
-    if h == einfrier_h and m == einfrier_m and not data.get("eingefroren", False):
-        if not konfigurierte_tage or heutiger_wochentag in konfigurierte_tage:
+    # Einfrieren zur für HEUTE konfigurierten Uhrzeit, nur wenn heute aktiviert ist
+    heute_eintrag = tage_config.get(str(heutiger_wochentag), {})
+    if heute_eintrag.get("aktiv") and not data.get("eingefroren", False):
+        try:
+            einfrier_h, einfrier_m = map(int, heute_eintrag.get("uhrzeit", "21:00").split(":"))
+        except Exception:
+            einfrier_h, einfrier_m = 21, 0
+        if h == einfrier_h and m == einfrier_m:
             for guild in bot.guilds:
                 await abstimmung_einfrieren(guild)
             await asyncio.sleep(61)
+
+    await check_probewoche_erinnerungen()
 
 # ─── SLASH COMMANDS ───────────────────────────────────────────────────────────
 
@@ -503,46 +642,51 @@ async def setrolle(interaction: discord.Interaction, rolle: discord.Role):
         ephemeral=True
     )
 
-@tree.command(name="aufstellung_tage", description="Legt fest an welchen Wochentagen Aufstellung stattfindet")
-@app_commands.describe(tage="Wochentage mit Komma getrennt, z.B. Montag,Donnerstag (leer = jeden Tag)")
+@tree.command(name="aufstellungstag", description="Aktiviert/deaktiviert einen Wochentag für die Aufstellung und legt seine Uhrzeit fest")
+@app_commands.describe(
+    tag="Wochentag",
+    aktiv="Soll an diesem Tag Aufstellung sein?",
+    uhrzeit="Uhrzeit im Format HH:MM (z.B. 19:30) – optional, wenn nur aktiv/inaktiv geändert wird"
+)
+@app_commands.choices(tag=[
+    app_commands.Choice(name=n, value=str(i)) for i, n in enumerate(WOCHENTAGE_NAMEN)
+])
 @app_commands.checks.has_permissions(administrator=True)
-async def aufstellung_tage(interaction: discord.Interaction, tage: str):
-    tage = tage.strip()
-    if not tage:
-        data["aufstellung_wochentage"] = None
-        save_data(data)
-        await interaction.response.send_message("✅ Aufstellung findet jetzt wieder **jeden Tag** statt.", ephemeral=True)
-        return
+async def aufstellungstag(interaction: discord.Interaction, tag: app_commands.Choice[str], aktiv: bool, uhrzeit: str = None):
+    tag_key = tag.value
+    config  = data.setdefault("aufstellung_tage_config", {})
+    eintrag = config.get(tag_key, {"aktiv": False, "uhrzeit": "20:00"})
+    eintrag["aktiv"] = aktiv
 
-    eingaben   = [t.strip().lower() for t in tage.split(",") if t.strip()]
-    ungueltige = [t for t in eingaben if t not in WOCHENTAGE_MAP]
-    if ungueltige:
-        await interaction.response.send_message(
-            f"❌ Unbekannte Wochentage: {', '.join(ungueltige)}\n"
-            f"Gültig sind: {', '.join(WOCHENTAGE_NAMEN)}",
-            ephemeral=True
-        )
-        return
+    if uhrzeit:
+        uhrzeit = uhrzeit.strip()
+        if not re.match(r"^([01]\d|2[0-3]):([0-5]\d)$", uhrzeit):
+            await interaction.response.send_message(
+                "❌ Ungültiges Uhrzeit-Format. Bitte HH:MM verwenden, z.B. 19:30", ephemeral=True
+            )
+            return
+        eintrag["uhrzeit"] = uhrzeit
 
-    tage_nums = sorted(set(WOCHENTAGE_MAP[t] for t in eingaben))
-    data["aufstellung_wochentage"] = tage_nums
+    config[tag_key] = eintrag
+    data["aufstellung_tage_config"] = config
     save_data(data)
-    namen = ", ".join(WOCHENTAGE_NAMEN[n] for n in tage_nums)
-    await interaction.response.send_message(f"✅ Aufstellung findet jetzt statt an: **{namen}**", ephemeral=True)
 
-@tree.command(name="aufstellung_zeit", description="Legt fest um wie viel Uhr die Aufstellung eingefroren wird")
-@app_commands.describe(uhrzeit="Uhrzeit im Format HH:MM, z.B. 21:00")
+    status = "**aktiv**" if aktiv else "**deaktiviert**"
+    await interaction.response.send_message(
+        f"✅ {WOCHENTAGE_NAMEN[int(tag_key)]}: {status}, Uhrzeit **{eintrag['uhrzeit']} Uhr**",
+        ephemeral=True
+    )
+
+@tree.command(name="aufstellungstage", description="Zeigt die Konfiguration aller Wochentage")
 @app_commands.checks.has_permissions(administrator=True)
-async def aufstellung_zeit(interaction: discord.Interaction, uhrzeit: str):
-    uhrzeit = uhrzeit.strip()
-    if not re.match(r"^([01]\d|2[0-3]):([0-5]\d)$", uhrzeit):
-        await interaction.response.send_message(
-            "❌ Ungültiges Format. Bitte HH:MM verwenden, z.B. 21:00", ephemeral=True
-        )
-        return
-    data["einfrier_uhrzeit"] = uhrzeit
-    save_data(data)
-    await interaction.response.send_message(f"✅ Aufstellung wird jetzt um **{uhrzeit} Uhr** eingefroren.", ephemeral=True)
+async def aufstellungstage_uebersicht(interaction: discord.Interaction):
+    config = data.get("aufstellung_tage_config", {})
+    zeilen = []
+    for i, name in enumerate(WOCHENTAGE_NAMEN):
+        eintrag = config.get(str(i), {"aktiv": False, "uhrzeit": "20:00"})
+        symbol  = "✅" if eintrag.get("aktiv") else "❌"
+        zeilen.append(f"{symbol} **{name}** — {eintrag.get('uhrzeit', '20:00')} Uhr")
+    await interaction.response.send_message("\n".join(zeilen), ephemeral=True)
 
 @tree.command(name="set_aufstellung", description="Setzt den Channel für die Aufstellungs-Abstimmung")
 @app_commands.describe(channel="Der Channel wo die Abstimmung gepostet wird")
@@ -610,6 +754,52 @@ async def abmeldung_button_posten(interaction: discord.Interaction):
     await abmeldung_button_posten_intern(interaction.guild)
     await interaction.response.send_message("✅ Abmeldung-Button-Nachricht gepostet/aktualisiert.", ephemeral=True)
 
+@tree.command(name="set_verifizierung_channel", description="Setzt den Channel für die Verifizierungs-Nachricht (Button)")
+@app_commands.describe(channel="Der Channel wo neue Mitglieder sich verifizieren")
+@app_commands.checks.has_permissions(administrator=True)
+async def set_verifizierung_channel(interaction: discord.Interaction, channel: discord.TextChannel):
+    data["channel_verifizierung"] = channel.id
+    data["verifizierung_nachricht_id"] = None
+    save_data(data)
+    await interaction.response.send_message(f"✅ Verifizierungs-Channel gesetzt: {channel.mention}", ephemeral=True)
+    await verifizierung_posten_intern(interaction.guild)
+
+@tree.command(name="verifizierung_posten", description="Postet oder aktualisiert die Verifizierungs-Nachricht")
+@app_commands.checks.has_permissions(administrator=True)
+async def verifizierung_posten(interaction: discord.Interaction):
+    if not data.get("channel_verifizierung"):
+        await interaction.response.send_message(
+            "❌ Kein Channel gesetzt!\nBitte zuerst **/set_verifizierung_channel #channel** benutzen.",
+            ephemeral=True
+        )
+        return
+    await verifizierung_posten_intern(interaction.guild)
+    await interaction.response.send_message("✅ Verifizierungs-Nachricht gepostet/aktualisiert.", ephemeral=True)
+
+@tree.command(name="set_verifizierung_log", description="Setzt den Channel für das Verifizierungs-Log")
+@app_commands.describe(channel="Der Channel wo jede neue Verifizierung protokolliert wird")
+@app_commands.checks.has_permissions(administrator=True)
+async def set_verifizierung_log(interaction: discord.Interaction, channel: discord.TextChannel):
+    data["channel_verifizierung_log"] = channel.id
+    save_data(data)
+    await interaction.response.send_message(f"✅ Verifizierungs-Log-Channel gesetzt: {channel.mention}", ephemeral=True)
+
+@tree.command(name="set_probe_rolle", description="Setzt die Rolle die nach der Verifizierung automatisch vergeben wird")
+@app_commands.describe(rolle="Die Rolle für neu verifizierte Probemitglieder")
+@app_commands.checks.has_permissions(administrator=True)
+async def set_probe_rolle(interaction: discord.Interaction, rolle: discord.Role):
+    data["rolle_probemitglied_id"] = str(rolle.id)
+    save_data(data)
+    await interaction.response.send_message(f"✅ Probemitglied-Rolle gesetzt: {rolle.mention}", ephemeral=True)
+
+@tree.command(name="set_probewoche_channel", description="Setzt den Channel für die automatische Probewoche-Erinnerung nach 7 Tagen")
+@app_commands.describe(channel="Der Channel wo die Erinnerung gepostet wird")
+@app_commands.checks.has_permissions(administrator=True)
+async def set_probewoche_channel(interaction: discord.Interaction, channel: discord.TextChannel):
+    data["channel_probewoche_erinnerung"] = channel.id
+    save_data(data)
+    await interaction.response.send_message(f"✅ Probewoche-Erinnerungs-Channel gesetzt: {channel.mention}", ephemeral=True)
+
 @tree.command(name="channels", description="Zeigt alle aktuell gesetzten Channels und die Rolle")
 @app_commands.checks.has_permissions(administrator=True)
 async def channels_info(interaction: discord.Interaction):
@@ -618,23 +808,32 @@ async def channels_info(interaction: discord.Interaction):
     abm    = interaction.guild.get_channel(int(data["channel_abmeldung"]))         if data.get("channel_abmeldung")         else None
     liste  = interaction.guild.get_channel(int(data["channel_abmeldung_liste"]))   if data.get("channel_abmeldung_liste")   else None
     button = interaction.guild.get_channel(int(data["channel_abmeldung_button"]))  if data.get("channel_abmeldung_button")  else None
+    verif  = interaction.guild.get_channel(int(data["channel_verifizierung"]))     if data.get("channel_verifizierung")     else None
+    vlog   = interaction.guild.get_channel(int(data["channel_verifizierung_log"])) if data.get("channel_verifizierung_log") else None
+    probe_ch = interaction.guild.get_channel(int(data["channel_probewoche_erinnerung"])) if data.get("channel_probewoche_erinnerung") else None
     rolle_id = data.get("rolle_id")
     rolle = interaction.guild.get_role(int(rolle_id)) if rolle_id else None
+    probe_rolle_id = data.get("rolle_probemitglied_id")
+    probe_rolle = interaction.guild.get_role(int(probe_rolle_id)) if probe_rolle_id else None
 
-    tage = data.get("aufstellung_wochentage")
-    tage_text = ", ".join(WOCHENTAGE_NAMEN[t] for t in tage) if tage else "Jeden Tag"
-    zeit_text = data.get("einfrier_uhrzeit", "21:00")
+    config = data.get("aufstellung_tage_config", {})
+    aktive_tage = [WOCHENTAGE_NAMEN[i] for i in range(7) if config.get(str(i), {}).get("aktiv")]
+    tage_text = ", ".join(aktive_tage) if aktive_tage else "Keine (nutze /aufstellungstag)"
 
     await interaction.response.send_message(
         f"**Aktuelle Einstellungen:**\n\n"
-        f"Rolle:              {rolle.mention   if rolle   else '❌ Nicht gesetzt – /setrolle benutzen'}\n"
-        f"Aufstellung:        {auf.mention     if auf     else '❌ Nicht gesetzt – /set_aufstellung benutzen'}\n"
-        f"Archiv:             {arch.mention    if arch    else '❌ Nicht gesetzt – /set_archiv benutzen'}\n"
-        f"Abmeldung (Log):    {abm.mention     if abm     else '❌ Nicht gesetzt – /set_abmeldung benutzen'}\n"
-        f"Abmeldungs-Liste:   {liste.mention   if liste   else '❌ Nicht gesetzt – /set_abmeldung_liste benutzen'}\n"
-        f"Abmeldung-Button:   {button.mention  if button  else '❌ Nicht gesetzt – /set_abmeldung_button benutzen'}\n\n"
-        f"Aufstellungs-Tage:  **{tage_text}**\n"
-        f"Einfrier-Uhrzeit:   **{zeit_text} Uhr**",
+        f"Rolle:                 {rolle.mention        if rolle        else '❌ Nicht gesetzt – /setrolle benutzen'}\n"
+        f"Aufstellung:           {auf.mention          if auf          else '❌ Nicht gesetzt – /set_aufstellung benutzen'}\n"
+        f"Archiv:                {arch.mention         if arch         else '❌ Nicht gesetzt – /set_archiv benutzen'}\n"
+        f"Abmeldung (Log):       {abm.mention          if abm          else '❌ Nicht gesetzt – /set_abmeldung benutzen'}\n"
+        f"Abmeldungs-Liste:      {liste.mention        if liste        else '❌ Nicht gesetzt – /set_abmeldung_liste benutzen'}\n"
+        f"Abmeldung-Button:      {button.mention       if button       else '❌ Nicht gesetzt – /set_abmeldung_button benutzen'}\n\n"
+        f"Aktive Aufstellungs-Tage: **{tage_text}**\n"
+        f"(Details: /aufstellungstage)\n\n"
+        f"Verifizierung-Channel: {verif.mention        if verif        else '❌ Nicht gesetzt – /set_verifizierung_channel benutzen'}\n"
+        f"Verifizierung-Log:     {vlog.mention         if vlog         else '❌ Nicht gesetzt – /set_verifizierung_log benutzen'}\n"
+        f"Probemitglied-Rolle:   {probe_rolle.mention  if probe_rolle  else '❌ Nicht gesetzt – /set_probe_rolle benutzen'}\n"
+        f"Probewoche-Erinnerung: {probe_ch.mention     if probe_ch     else '❌ Nicht gesetzt – /set_probewoche_channel benutzen'}",
         ephemeral=True
     )
 
@@ -798,6 +997,7 @@ async def on_ready():
 
     bot.add_view(AufstellungView())
     bot.add_view(AbmeldungButtonView())
+    bot.add_view(VerifizierungButtonView())
     check_zeit.start()
     print("Tasks gestartet. Bot ist bereit!")
 
