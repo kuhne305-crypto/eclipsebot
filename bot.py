@@ -39,7 +39,6 @@ def load_data():
         "channel_verifizierung": None,
         "verifizierung_nachricht_id": None,
         "channel_verifizierung_log": None,
-        "rolle_probemitglied_id": None,
         "channel_probewoche_erinnerung": None,
         "verifizierungen": {},
         "channel_chat_hinweis": None
@@ -320,6 +319,15 @@ async def abmeldung_button_posten_intern(guild):
     save_data(data)
 
 # ─── VERIFIZIERUNG (IC-Name, Nummer, Probewoche) ─────────────────────────────
+# ─── ROLLEN NACH VERIFIZIERUNG ────────────────────────────────────────────────
+ROLLEN_NACH_VERIFIZIERUNG = {
+    "Probezeit":    1528430778587938886,
+    "Homies":       1526202327365582918,
+    "01 - Runner":  1526202327436886115,
+    "Wochenabgabe": 1526202327365582916,
+}
+PROBEZEIT_ROLLE_ID = ROLLEN_NACH_VERIFIZIERUNG["Probezeit"]
+
 class VerifizierungModal(discord.ui.Modal, title="Verifizierung: IC-Name & Nummer"):
     ic_name = discord.ui.TextInput(
         label="Dein In-Character Name", placeholder="Max Mustermann", required=True, max_length=32
@@ -344,19 +352,20 @@ class VerifizierungModal(discord.ui.Modal, title="Verifizierung: IC-Name & Numme
         }
         save_data(data)
 
-        rolle_ok = True
-        rolle_id = data.get("rolle_probemitglied_id")
-        if rolle_id:
-            rolle = interaction.guild.get_role(int(rolle_id))
-            if rolle:
-                try:
-                    await interaction.user.add_roles(rolle)
-                except discord.Forbidden:
-                    rolle_ok = False
+        nicht_vergeben = []
+        for name, rolle_id in ROLLEN_NACH_VERIFIZIERUNG.items():
+            rolle = interaction.guild.get_role(rolle_id)
+            if not rolle:
+                nicht_vergeben.append(f"{name} (nicht gefunden)")
+                continue
+            try:
+                await interaction.user.add_roles(rolle)
+            except discord.Forbidden:
+                nicht_vergeben.append(f"{name} (keine Berechtigung)")
 
         antwort = "✅ Verifizierung abgeschlossen! Deine Probewoche beginnt jetzt."
-        if rolle_id and not rolle_ok:
-            antwort += "\n⚠️ Die Probemitglied-Rolle konnte nicht automatisch vergeben werden (fehlende Berechtigung)."
+        if nicht_vergeben:
+            antwort += "\n⚠️ Diese Rollen konnten nicht vergeben werden: " + ", ".join(nicht_vergeben)
         await interaction.response.send_message(antwort, ephemeral=True)
 
         if data.get("channel_verifizierung_log"):
@@ -841,13 +850,37 @@ async def set_verifizierung_log(interaction: discord.Interaction, channel: disco
     save_data(data)
     await interaction.response.send_message(f"✅ Verifizierungs-Log-Channel gesetzt: {channel.mention}", ephemeral=True)
 
-@tree.command(name="set_probe_rolle", description="Setzt die Rolle die nach der Verifizierung automatisch vergeben wird")
-@app_commands.describe(rolle="Die Rolle für neu verifizierte Probemitglieder")
+@tree.command(name="probezeit_beenden", description="Beendet die Probezeit eines Mitglieds vorzeitig")
+@app_commands.describe(mitglied="Das Mitglied dessen Probezeit vorzeitig beendet wird")
 @app_commands.checks.has_permissions(administrator=True)
-async def set_probe_rolle(interaction: discord.Interaction, rolle: discord.Role):
-    data["rolle_probemitglied_id"] = str(rolle.id)
-    save_data(data)
-    await interaction.response.send_message(f"✅ Probemitglied-Rolle gesetzt: {rolle.mention}", ephemeral=True)
+async def probezeit_beenden(interaction: discord.Interaction, mitglied: discord.Member):
+    rolle = interaction.guild.get_role(PROBEZEIT_ROLLE_ID)
+    entfernt = False
+    if rolle and rolle in mitglied.roles:
+        try:
+            await mitglied.remove_roles(rolle)
+            entfernt = True
+        except discord.Forbidden:
+            await interaction.response.send_message(
+                "❌ Ich habe keine Berechtigung, die Probezeit-Rolle zu entfernen.", ephemeral=True
+            )
+            return
+
+    uid = str(mitglied.id)
+    verifizierungen = data.setdefault("verifizierungen", {})
+    if uid in verifizierungen:
+        verifizierungen[uid]["erinnert"] = True  # verhindert die automatische 7-Tage-Erinnerung
+        save_data(data)
+
+    if entfernt:
+        await interaction.response.send_message(
+            f"✅ Probezeit von **{mitglied.display_name}** vorzeitig beendet (Rolle entfernt).", ephemeral=True
+        )
+    else:
+        await interaction.response.send_message(
+            f"ℹ️ **{mitglied.display_name}** hatte keine Probezeit-Rolle mehr, Eintrag trotzdem als beendet markiert.",
+            ephemeral=True
+        )
 
 @tree.command(name="set_probewoche_channel", description="Setzt den Channel für die automatische Probewoche-Erinnerung nach 7 Tagen")
 @app_commands.describe(channel="Der Channel wo die Erinnerung gepostet wird")
@@ -883,8 +916,10 @@ async def channels_info(interaction: discord.Interaction):
     chat_ch  = interaction.guild.get_channel(int(data["channel_chat_hinweis"])) if data.get("channel_chat_hinweis") else None
     rolle_id = data.get("rolle_id")
     rolle = interaction.guild.get_role(int(rolle_id)) if rolle_id else None
-    probe_rolle_id = data.get("rolle_probemitglied_id")
-    probe_rolle = interaction.guild.get_role(int(probe_rolle_id)) if probe_rolle_id else None
+    verif_rollen_status = []
+    for name, rid in ROLLEN_NACH_VERIFIZIERUNG.items():
+        r = interaction.guild.get_role(rid)
+        verif_rollen_status.append(f"{name}: {r.mention if r else '❌ nicht gefunden'}")
 
     config = data.get("aufstellung_tage_config", {})
     aktive_tage = [WOCHENTAGE_NAMEN[i] for i in range(7) if config.get(str(i), {}).get("aktiv")]
@@ -902,7 +937,7 @@ async def channels_info(interaction: discord.Interaction):
         f"(Details: /aufstellungstage)\n\n"
         f"Verifizierung-Channel: {verif.mention        if verif        else '❌ Nicht gesetzt – /set_verifizierung_channel benutzen'}\n"
         f"Verifizierung-Log:     {vlog.mention         if vlog         else '❌ Nicht gesetzt – /set_verifizierung_log benutzen'}\n"
-        f"Probemitglied-Rolle:   {probe_rolle.mention  if probe_rolle  else '❌ Nicht gesetzt – /set_probe_rolle benutzen'}\n"
+        f"Rollen nach Verify:    {' | '.join(verif_rollen_status)}\n"
         f"Probewoche-Erinnerung: {probe_ch.mention     if probe_ch     else '❌ Nicht gesetzt – /set_probewoche_channel benutzen'}\n"
         f"OOC-Regelhinweis:      {chat_ch.mention      if chat_ch      else '❌ Nicht gesetzt – /set_chat benutzen'}",
         ephemeral=True
