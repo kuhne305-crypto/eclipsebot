@@ -291,11 +291,16 @@ class AbmeldungButtonView(discord.ui.View):
         await interaction.response.send_modal(AbmeldungModal())
 
 async def abmeldung_button_posten_intern(guild):
+    """Postet/aktualisiert die Abmeldung-Button-Nachricht.
+    Gibt (True, None) bei Erfolg zurück, sonst (False, "Fehlertext")."""
     if not data.get("channel_abmeldung_button"):
-        return
+        return False, "Kein Channel gesetzt."
     kanal = guild.get_channel(int(data["channel_abmeldung_button"]))
     if not kanal:
-        return
+        return False, (
+            "Channel wurde nicht gefunden. Entweder existiert er nicht mehr, "
+            "oder der Bot sieht ihn nicht (z.B. weil er im Server keinen Zugriff darauf hat)."
+        )
 
     embed = discord.Embed(
         title="Abmeldung",
@@ -310,13 +315,23 @@ async def abmeldung_button_posten_intern(guild):
         try:
             msg = await kanal.fetch_message(int(msg_id))
             await msg.edit(embed=embed, view=view)
-            return
+            return True, None
         except Exception as e:
             print(f"Alte Abmeldung-Button-Nachricht nicht gefunden, poste neu: {e}")
 
-    msg = await kanal.send(embed=embed, view=view)
+    try:
+        msg = await kanal.send(embed=embed, view=view)
+    except discord.Forbidden:
+        return False, (
+            f"Der Bot hat keine Berechtigung, in {kanal.mention} zu schreiben. "
+            f"Bitte gib der Bot-Rolle dort **Nachrichten senden** und **Embeds einbetten**."
+        )
+    except Exception as e:
+        return False, f"Unerwarteter Fehler beim Senden: {e}"
+
     data["abmeldung_button_nachricht_id"] = str(msg.id)
     save_data(data)
+    return True, None
 
 # ─── VERIFIZIERUNG (IC-Name, Nummer, Probewoche) ─────────────────────────────
 # ─── ROLLEN NACH VERIFIZIERUNG ────────────────────────────────────────────────
@@ -372,11 +387,11 @@ class VerifizierungModal(discord.ui.Modal, title="Verifizierung: IC-Name & Numme
             log_kanal = interaction.guild.get_channel(int(data["channel_verifizierung_log"]))
             if log_kanal:
                 embed = discord.Embed(title="Neue Verifizierung", color=EMBED_COLOR)
-                embed.add_field(name="Discord",   value=interaction.user.mention, inline=True)
-                embed.add_field(name="IC-Name",   value=self.ic_name.value,       inline=True)
-                embed.add_field(name="IC-Nummer", value=self.ic_nummer.value,     inline=True)
+                embed.add_field(name="Discord",   value=interaction.user.mention,        inline=True)
+                embed.add_field(name="IC-Name",   value=self.ic_name.value,              inline=True)
+                embed.add_field(name="IC-Nummer", value=f"**{self.ic_nummer.value}**",   inline=True)
                 if self.geworben_von.value:
-                    embed.add_field(name="Angeworben von", value=self.geworben_von.value, inline=True)
+                    embed.add_field(name="Angeworben von", value=f"**{self.geworben_von.value}**", inline=True)
                 embed.set_footer(text="ECLIPSE")
                 embed.timestamp = datetime.now(TIMEZONE)
                 await log_kanal.send(embed=embed)
@@ -390,11 +405,16 @@ class VerifizierungButtonView(discord.ui.View):
         await interaction.response.send_modal(VerifizierungModal())
 
 async def verifizierung_posten_intern(guild):
+    """Postet/aktualisiert die Verifizierungs-Nachricht.
+    Gibt (True, None) bei Erfolg zurück, sonst (False, "Fehlertext")."""
     if not data.get("channel_verifizierung"):
-        return
+        return False, "Kein Channel gesetzt."
     kanal = guild.get_channel(int(data["channel_verifizierung"]))
     if not kanal:
-        return
+        return False, (
+            "Channel wurde nicht gefunden. Entweder existiert er nicht mehr, "
+            "oder der Bot sieht ihn nicht (z.B. weil er im Server keinen Zugriff darauf hat)."
+        )
 
     embed = discord.Embed(
         title="Verifizierung",
@@ -409,13 +429,23 @@ async def verifizierung_posten_intern(guild):
         try:
             msg = await kanal.fetch_message(int(msg_id))
             await msg.edit(embed=embed, view=view)
-            return
+            return True, None
         except Exception as e:
             print(f"Alte Verifizierungs-Nachricht nicht gefunden, poste neu: {e}")
 
-    msg = await kanal.send(embed=embed, view=view)
+    try:
+        msg = await kanal.send(embed=embed, view=view)
+    except discord.Forbidden:
+        return False, (
+            f"Der Bot hat keine Berechtigung, in {kanal.mention} zu schreiben. "
+            f"Bitte gib der Bot-Rolle dort **Nachrichten senden** und **Embeds einbetten**."
+        )
+    except Exception as e:
+        return False, f"Unerwarteter Fehler beim Senden: {e}"
+
     data["verifizierung_nachricht_id"] = str(msg.id)
     save_data(data)
+    return True, None
 
 async def update_nachricht(guild):
     msg_id = data.get("aktuelle_nachricht_id")
@@ -488,23 +518,37 @@ def build_abmeldung_liste_embed(guild):
     return embed
 
 async def update_abmeldung_liste(guild):
+    """Postet/aktualisiert die Abmeldungs-Übersicht.
+    Gibt (True, None) bei Erfolg zurück, sonst (False, "Fehlertext")."""
     if not data.get("channel_abmeldung_liste"):
-        return
+        return False, "Kein Channel gesetzt."
     kanal = guild.get_channel(int(data["channel_abmeldung_liste"]))
     if not kanal:
-        return
+        return False, (
+            "Channel wurde nicht gefunden. Entweder existiert er nicht mehr, "
+            "oder der Bot sieht ihn nicht (z.B. weil er im Server keinen Zugriff darauf hat)."
+        )
     embed  = build_abmeldung_liste_embed(guild)
     msg_id = data.get("abmeldung_liste_nachricht_id")
     if msg_id:
         try:
             msg = await kanal.fetch_message(int(msg_id))
             await msg.edit(embed=embed)
-            return
+            return True, None
         except Exception as e:
             print(f"Abmeldungs-Liste Nachricht nicht gefunden, poste neu: {e}")
-    msg = await kanal.send(embed=embed)
+    try:
+        msg = await kanal.send(embed=embed)
+    except discord.Forbidden:
+        return False, (
+            f"Der Bot hat keine Berechtigung, in {kanal.mention} zu schreiben. "
+            f"Bitte gib der Bot-Rolle dort **Nachrichten senden** und **Embeds einbetten**."
+        )
+    except Exception as e:
+        return False, f"Unerwarteter Fehler beim Senden: {e}"
     data["abmeldung_liste_nachricht_id"] = str(msg.id)
     save_data(data)
+    return True, None
 
 # ─── NEUE ABSTIMMUNG POSTEN ───────────────────────────────────────────────────
 async def neue_abstimmung_posten(guild, manual_channel=None, verwende_heute=False):
@@ -658,10 +702,6 @@ async def ooc_hinweis_senden():
             except Exception as e:
                 print(f"Fehler beim Senden des OOC-Hinweises: {e}")
 
-@tasks.loop(hours=1)
-async def check_ooc_hinweis():
-    await ooc_hinweis_senden()
-
 # ─── TASKS ────────────────────────────────────────────────────────────────────
 @tasks.loop(minutes=1)
 async def check_zeit():
@@ -669,6 +709,10 @@ async def check_zeit():
     h, m = now.hour, now.minute
     heutiger_wochentag  = now.weekday()
     morgiger_wochentag  = (now + timedelta(days=1)).weekday()
+
+    # OOC-Regelhinweis nur zur vollen Stunde (16:00, 17:00, ...)
+    if m == 0:
+        await ooc_hinweis_senden()
 
     tage_config = data.get("aufstellung_tage_config", {})
 
@@ -791,10 +835,16 @@ async def set_abmeldung_liste(interaction: discord.Interaction, channel: discord
     data["channel_abmeldung_liste"] = channel.id
     data["abmeldung_liste_nachricht_id"] = None
     save_data(data)
-    await interaction.response.send_message(
-        f"✅ Abmeldungs-Übersicht-Channel gesetzt: {channel.mention}", ephemeral=True
-    )
-    await update_abmeldung_liste(interaction.guild)
+    ok, fehler = await update_abmeldung_liste(interaction.guild)
+    if ok:
+        await interaction.response.send_message(
+            f"✅ Abmeldungs-Übersicht-Channel gesetzt: {channel.mention}\nDie Liste wurde gepostet.", ephemeral=True
+        )
+    else:
+        await interaction.response.send_message(
+            f"⚠️ Channel gesetzt ({channel.mention}), aber die Liste konnte nicht gepostet werden:\n{fehler}",
+            ephemeral=True
+        )
 
 @tree.command(name="set_abmeldung_button", description="Setzt den Channel für den Abmeldung-Button")
 @app_commands.describe(channel="Der Channel wo der 'Abmeldung' Button gepostet wird")
@@ -803,10 +853,17 @@ async def set_abmeldung_button(interaction: discord.Interaction, channel: discor
     data["channel_abmeldung_button"] = channel.id
     data["abmeldung_button_nachricht_id"] = None
     save_data(data)
-    await interaction.response.send_message(
-        f"✅ Abmeldung-Button-Channel gesetzt: {channel.mention}", ephemeral=True
-    )
-    await abmeldung_button_posten_intern(interaction.guild)
+    ok, fehler = await abmeldung_button_posten_intern(interaction.guild)
+    if ok:
+        await interaction.response.send_message(
+            f"✅ Abmeldung-Button-Channel gesetzt: {channel.mention}\nDie Button-Nachricht wurde gepostet.",
+            ephemeral=True
+        )
+    else:
+        await interaction.response.send_message(
+            f"⚠️ Channel gesetzt ({channel.mention}), aber die Button-Nachricht konnte nicht gepostet werden:\n{fehler}",
+            ephemeral=True
+        )
 
 @tree.command(name="abmeldung_button_posten", description="Postet oder aktualisiert die Abmeldung-Button-Nachricht")
 @app_commands.checks.has_permissions(administrator=True)
@@ -817,8 +874,11 @@ async def abmeldung_button_posten(interaction: discord.Interaction):
             ephemeral=True
         )
         return
-    await abmeldung_button_posten_intern(interaction.guild)
-    await interaction.response.send_message("✅ Abmeldung-Button-Nachricht gepostet/aktualisiert.", ephemeral=True)
+    ok, fehler = await abmeldung_button_posten_intern(interaction.guild)
+    if ok:
+        await interaction.response.send_message("✅ Abmeldung-Button-Nachricht gepostet/aktualisiert.", ephemeral=True)
+    else:
+        await interaction.response.send_message(f"❌ Nachricht konnte nicht gepostet werden:\n{fehler}", ephemeral=True)
 
 @tree.command(name="set_verifizierung_channel", description="Setzt den Channel für die Verifizierungs-Nachricht (Button)")
 @app_commands.describe(channel="Der Channel wo neue Mitglieder sich verifizieren")
@@ -827,8 +887,17 @@ async def set_verifizierung_channel(interaction: discord.Interaction, channel: d
     data["channel_verifizierung"] = channel.id
     data["verifizierung_nachricht_id"] = None
     save_data(data)
-    await interaction.response.send_message(f"✅ Verifizierungs-Channel gesetzt: {channel.mention}", ephemeral=True)
-    await verifizierung_posten_intern(interaction.guild)
+    ok, fehler = await verifizierung_posten_intern(interaction.guild)
+    if ok:
+        await interaction.response.send_message(
+            f"✅ Verifizierungs-Channel gesetzt: {channel.mention}\nDie Verifizierungs-Nachricht wurde gepostet.",
+            ephemeral=True
+        )
+    else:
+        await interaction.response.send_message(
+            f"⚠️ Channel gesetzt ({channel.mention}), aber die Nachricht konnte nicht gepostet werden:\n{fehler}",
+            ephemeral=True
+        )
 
 @tree.command(name="verifizierung_posten", description="Postet oder aktualisiert die Verifizierungs-Nachricht")
 @app_commands.checks.has_permissions(administrator=True)
@@ -839,8 +908,11 @@ async def verifizierung_posten(interaction: discord.Interaction):
             ephemeral=True
         )
         return
-    await verifizierung_posten_intern(interaction.guild)
-    await interaction.response.send_message("✅ Verifizierungs-Nachricht gepostet/aktualisiert.", ephemeral=True)
+    ok, fehler = await verifizierung_posten_intern(interaction.guild)
+    if ok:
+        await interaction.response.send_message("✅ Verifizierungs-Nachricht gepostet/aktualisiert.", ephemeral=True)
+    else:
+        await interaction.response.send_message(f"❌ Nachricht konnte nicht gepostet werden:\n{fehler}", ephemeral=True)
 
 @tree.command(name="set_verifizierung_log", description="Setzt den Channel für das Verifizierungs-Log")
 @app_commands.describe(channel="Der Channel wo jede neue Verifizierung protokolliert wird")
@@ -1105,7 +1177,6 @@ async def on_ready():
     bot.add_view(AbmeldungButtonView())
     bot.add_view(VerifizierungButtonView())
     check_zeit.start()
-    check_ooc_hinweis.start()
     print("Tasks gestartet. Bot ist bereit!")
 
 @bot.event
