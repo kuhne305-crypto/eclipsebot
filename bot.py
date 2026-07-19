@@ -378,9 +378,22 @@ class VerifizierungModal(discord.ui.Modal, title="Verifizierung: IC-Name & Numme
             except discord.Forbidden:
                 nicht_vergeben.append(f"{name} (keine Berechtigung)")
 
+        name_fehler = None
+        try:
+            await interaction.user.edit(nick=self.ic_name.value.strip())
+        except discord.Forbidden:
+            name_fehler = (
+                "Servername konnte nicht geändert werden (keine Berechtigung – "
+                "z.B. bei Server-Inhaber:innen oder wenn deine höchste Rolle über der Bot-Rolle liegt)."
+            )
+        except Exception as e:
+            name_fehler = f"Servername konnte nicht geändert werden: {e}"
+
         antwort = "✅ Verifizierung abgeschlossen! Deine Probewoche beginnt jetzt."
         if nicht_vergeben:
             antwort += "\n⚠️ Diese Rollen konnten nicht vergeben werden: " + ", ".join(nicht_vergeben)
+        if name_fehler:
+            antwort += f"\n⚠️ {name_fehler}"
         await interaction.response.send_message(antwort, ephemeral=True)
 
         if data.get("channel_verifizierung_log"):
