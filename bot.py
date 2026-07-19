@@ -41,7 +41,7 @@ def load_data():
         "channel_verifizierung_log": 1528441509542625290,
         "channel_probewoche_erinnerung": 1528442210901557268,
         "verifizierungen": {},
-        "channel_chat_hinweis": 1526202329987289254
+        "channel_chat_hinweis": 1528463937149079642
     }
 
 def save_data(data):
