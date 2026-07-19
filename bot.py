@@ -41,7 +41,8 @@ def load_data():
         "channel_verifizierung_log": None,
         "rolle_probemitglied_id": None,
         "channel_probewoche_erinnerung": None,
-        "verifizierungen": {}
+        "verifizierungen": {},
+        "channel_chat_hinweis": None
     }
 
 def save_data(data):
@@ -596,6 +597,62 @@ async def check_probewoche_erinnerungen():
     if geaendert:
         save_data(data)
 
+# ─── OOC-CHAT REGELHINWEIS (stündlich) ────────────────────────────────────────
+def build_ooc_hinweis_embed():
+    embed = discord.Embed(
+        title="📢 OOC-CHAT – REGELHINWEIS",
+        description="Dieser Channel ist **ausschließlich OOC**. Bitte an folgende Regeln halten:",
+        color=EMBED_COLOR
+    )
+    embed.add_field(
+        name="🚫 Keine IC-Informationen",
+        value="Alles, was euren Charakter, Storys, Orte oder Geschehnisse ingame betrifft, gehört hier nicht rein.",
+        inline=False
+    )
+    embed.add_field(
+        name="❓ Keine IC-Fragen",
+        value="Fragen zu RP-Situationen, Personen oder Abläufen bitte direkt ingame klären.",
+        inline=False
+    )
+    embed.add_field(
+        name="🤝 Keine IC-Absprachen",
+        value="Absprachen, die das RP beeinflussen könnten, dürfen nicht außerhalb des Spiels stattfinden.",
+        inline=False
+    )
+    embed.add_field(
+        name="🧠 Kein Meta-Gaming",
+        value="OOC-Wissen darf nicht genutzt werden, um sich ingame Vorteile zu verschaffen.",
+        inline=False
+    )
+    embed.add_field(
+        name="🔫 Kein Gambo-Talk",
+        value="Kein Reden über Schießereien, Taktiken oder ähnliche Action-Themen.",
+        inline=False
+    )
+    embed.add_field(
+        name="💡 Merke",
+        value="Wer etwas IC klären oder wissen möchte, macht dies **ingame** – nicht hier.",
+        inline=False
+    )
+    embed.set_footer(text="ECLIPSE")
+    embed.timestamp = datetime.now(TIMEZONE)
+    return embed
+
+async def ooc_hinweis_senden():
+    if not data.get("channel_chat_hinweis"):
+        return
+    for guild in bot.guilds:
+        kanal = guild.get_channel(int(data["channel_chat_hinweis"]))
+        if kanal:
+            try:
+                await kanal.send(embed=build_ooc_hinweis_embed())
+            except Exception as e:
+                print(f"Fehler beim Senden des OOC-Hinweises: {e}")
+
+@tasks.loop(hours=1)
+async def check_ooc_hinweis():
+    await ooc_hinweis_senden()
+
 # ─── TASKS ────────────────────────────────────────────────────────────────────
 @tasks.loop(minutes=1)
 async def check_zeit():
@@ -800,6 +857,18 @@ async def set_probewoche_channel(interaction: discord.Interaction, channel: disc
     save_data(data)
     await interaction.response.send_message(f"✅ Probewoche-Erinnerungs-Channel gesetzt: {channel.mention}", ephemeral=True)
 
+@tree.command(name="set_chat", description="Setzt den Channel für den stündlichen OOC-Regelhinweis")
+@app_commands.describe(channel="Der Channel wo stündlich der OOC-Regelhinweis gepostet wird")
+@app_commands.checks.has_permissions(administrator=True)
+async def set_chat(interaction: discord.Interaction, channel: discord.TextChannel):
+    data["channel_chat_hinweis"] = channel.id
+    save_data(data)
+    await interaction.response.send_message(
+        f"✅ OOC-Regelhinweis-Channel gesetzt: {channel.mention}\nAb jetzt wird dort stündlich der Hinweis gepostet.",
+        ephemeral=True
+    )
+    await channel.send(embed=build_ooc_hinweis_embed())
+
 @tree.command(name="channels", description="Zeigt alle aktuell gesetzten Channels und die Rolle")
 @app_commands.checks.has_permissions(administrator=True)
 async def channels_info(interaction: discord.Interaction):
@@ -811,6 +880,7 @@ async def channels_info(interaction: discord.Interaction):
     verif  = interaction.guild.get_channel(int(data["channel_verifizierung"]))     if data.get("channel_verifizierung")     else None
     vlog   = interaction.guild.get_channel(int(data["channel_verifizierung_log"])) if data.get("channel_verifizierung_log") else None
     probe_ch = interaction.guild.get_channel(int(data["channel_probewoche_erinnerung"])) if data.get("channel_probewoche_erinnerung") else None
+    chat_ch  = interaction.guild.get_channel(int(data["channel_chat_hinweis"])) if data.get("channel_chat_hinweis") else None
     rolle_id = data.get("rolle_id")
     rolle = interaction.guild.get_role(int(rolle_id)) if rolle_id else None
     probe_rolle_id = data.get("rolle_probemitglied_id")
@@ -833,7 +903,8 @@ async def channels_info(interaction: discord.Interaction):
         f"Verifizierung-Channel: {verif.mention        if verif        else '❌ Nicht gesetzt – /set_verifizierung_channel benutzen'}\n"
         f"Verifizierung-Log:     {vlog.mention         if vlog         else '❌ Nicht gesetzt – /set_verifizierung_log benutzen'}\n"
         f"Probemitglied-Rolle:   {probe_rolle.mention  if probe_rolle  else '❌ Nicht gesetzt – /set_probe_rolle benutzen'}\n"
-        f"Probewoche-Erinnerung: {probe_ch.mention     if probe_ch     else '❌ Nicht gesetzt – /set_probewoche_channel benutzen'}",
+        f"Probewoche-Erinnerung: {probe_ch.mention     if probe_ch     else '❌ Nicht gesetzt – /set_probewoche_channel benutzen'}\n"
+        f"OOC-Regelhinweis:      {chat_ch.mention      if chat_ch      else '❌ Nicht gesetzt – /set_chat benutzen'}",
         ephemeral=True
     )
 
@@ -999,6 +1070,7 @@ async def on_ready():
     bot.add_view(AbmeldungButtonView())
     bot.add_view(VerifizierungButtonView())
     check_zeit.start()
+    check_ooc_hinweis.start()
     print("Tasks gestartet. Bot ist bereit!")
 
 @bot.event
