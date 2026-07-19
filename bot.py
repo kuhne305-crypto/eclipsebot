@@ -598,45 +598,22 @@ async def check_probewoche_erinnerungen():
         save_data(data)
 
 # ─── OOC-CHAT REGELHINWEIS (stündlich) ────────────────────────────────────────
-def build_ooc_hinweis_embed():
-    embed = discord.Embed(
-        title="📢 OOC-CHAT – REGELHINWEIS",
-        description="Dieser Channel ist **ausschließlich OOC**. Bitte an folgende Regeln halten:",
-        color=EMBED_COLOR
+def build_ooc_hinweis_text():
+    return (
+        ">>> **📢 OOC-CHAT – REGELHINWEIS**\n"
+        "Dieser Channel ist **ausschließlich OOC**.\n\n"
+        "❌ **KEINE** IC-Informationen\n"
+        "Alles, was euren Charakter, Storys, Orte oder Geschehnisse ingame betrifft, gehört hier nicht rein.\n\n"
+        "❌ **KEINE** IC-Fragen\n"
+        "Fragen zu RP-Situationen, Personen oder Abläufen bitte direkt ingame klären.\n\n"
+        "❌ **KEINE** IC-Absprachen\n"
+        "Absprachen, die das RP beeinflussen könnten, dürfen nicht außerhalb des Spiels stattfinden.\n\n"
+        "❌ **KEIN** Meta-Gaming\n"
+        "OOC-Wissen darf nicht genutzt werden, um sich ingame Vorteile zu verschaffen.\n\n"
+        "❌ **KEIN** Gambo-Talk\n"
+        "Kein Reden über Schießereien, Taktiken oder ähnliche Action-Themen.\n\n"
+        "Wer etwas IC klären oder wissen möchte, macht dies **ingame** – nicht hier."
     )
-    embed.add_field(
-        name="🚫 Keine IC-Informationen",
-        value="Alles, was euren Charakter, Storys, Orte oder Geschehnisse ingame betrifft, gehört hier nicht rein.",
-        inline=False
-    )
-    embed.add_field(
-        name="❓ Keine IC-Fragen",
-        value="Fragen zu RP-Situationen, Personen oder Abläufen bitte direkt ingame klären.",
-        inline=False
-    )
-    embed.add_field(
-        name="🤝 Keine IC-Absprachen",
-        value="Absprachen, die das RP beeinflussen könnten, dürfen nicht außerhalb des Spiels stattfinden.",
-        inline=False
-    )
-    embed.add_field(
-        name="🧠 Kein Meta-Gaming",
-        value="OOC-Wissen darf nicht genutzt werden, um sich ingame Vorteile zu verschaffen.",
-        inline=False
-    )
-    embed.add_field(
-        name="🔫 Kein Gambo-Talk",
-        value="Kein Reden über Schießereien, Taktiken oder ähnliche Action-Themen.",
-        inline=False
-    )
-    embed.add_field(
-        name="💡 Merke",
-        value="Wer etwas IC klären oder wissen möchte, macht dies **ingame** – nicht hier.",
-        inline=False
-    )
-    embed.set_footer(text="ECLIPSE")
-    embed.timestamp = datetime.now(TIMEZONE)
-    return embed
 
 async def ooc_hinweis_senden():
     if not data.get("channel_chat_hinweis"):
@@ -645,7 +622,7 @@ async def ooc_hinweis_senden():
         kanal = guild.get_channel(int(data["channel_chat_hinweis"]))
         if kanal:
             try:
-                await kanal.send(embed=build_ooc_hinweis_embed())
+                await kanal.send(content=build_ooc_hinweis_text())
             except Exception as e:
                 print(f"Fehler beim Senden des OOC-Hinweises: {e}")
 
@@ -867,7 +844,7 @@ async def set_chat(interaction: discord.Interaction, channel: discord.TextChanne
         f"✅ OOC-Regelhinweis-Channel gesetzt: {channel.mention}\nAb jetzt wird dort stündlich der Hinweis gepostet.",
         ephemeral=True
     )
-    await channel.send(embed=build_ooc_hinweis_embed())
+    await channel.send(content=build_ooc_hinweis_text())
 
 @tree.command(name="channels", description="Zeigt alle aktuell gesetzten Channels und die Rolle")
 @app_commands.checks.has_permissions(administrator=True)
