@@ -21,27 +21,27 @@ def load_data():
         with open(DATA_FILE, "r") as f:
             return json.load(f)
     return {
-        "rolle_id": None,
+        "rolle_id": "1526202327365582918",
         "aktuelle_nachricht_id": None,
         "abstimmung": {},
         "abmeldungen": {},
         "eingefroren": False,
         "aktuelles_datum": None,
-        "channel_aufstellung": None,
-        "channel_archiv": None,
-        "channel_abmeldung": None,
-        "channel_abmeldung_liste": None,
+        "channel_aufstellung": 1526202329253019664,
+        "channel_archiv": 1528440984869015552,
+        "channel_abmeldung": 1528441264150810805,
+        "channel_abmeldung_liste": 1526202329253019665,
         "abmeldung_liste_nachricht_id": None,
-        "channel_abmeldung_button": None,
+        "channel_abmeldung_button": 1526202329253019666,
         "abmeldung_button_nachricht_id": None,
         "aufstellung_tage_config": {str(i): {"aktiv": False, "uhrzeit": "20:00"} for i in range(7)},
         "aktueller_wochentag": None,
-        "channel_verifizierung": None,
+        "channel_verifizierung": 1526202329253019659,
         "verifizierung_nachricht_id": None,
-        "channel_verifizierung_log": None,
-        "channel_probewoche_erinnerung": None,
+        "channel_verifizierung_log": 1528441509542625290,
+        "channel_probewoche_erinnerung": 1528442210901557268,
         "verifizierungen": {},
-        "channel_chat_hinweis": None
+        "channel_chat_hinweis": 1526202329987289254
     }
 
 def save_data(data):
