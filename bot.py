@@ -601,17 +601,17 @@ async def check_probewoche_erinnerungen():
 def build_ooc_hinweis_text():
     return (
         ">>> **📢 OOC-CHAT – REGELHINWEIS**\n"
-        "Dieser Channel ist **ausschließlich OOC**.\n\n"
+        "-# Dieser Channel ist **ausschließlich OOC**.\n\n"
         "❌ **KEINE** IC-Informationen\n"
-        "Alles, was euren Charakter, Storys, Orte oder Geschehnisse ingame betrifft, gehört hier nicht rein.\n\n"
+        "-# Alles, was euren Charakter, Storys, Orte oder Geschehnisse ingame betrifft, gehört hier nicht rein.\n\n"
         "❌ **KEINE** IC-Fragen\n"
-        "Fragen zu RP-Situationen, Personen oder Abläufen bitte direkt ingame klären.\n\n"
+        "-# Fragen zu RP-Situationen, Personen oder Abläufen bitte direkt ingame klären.\n\n"
         "❌ **KEINE** IC-Absprachen\n"
-        "Absprachen, die das RP beeinflussen könnten, dürfen nicht außerhalb des Spiels stattfinden.\n\n"
+        "-# Absprachen, die das RP beeinflussen könnten, dürfen nicht außerhalb des Spiels stattfinden.\n\n"
         "❌ **KEIN** Meta-Gaming\n"
-        "OOC-Wissen darf nicht genutzt werden, um sich ingame Vorteile zu verschaffen.\n\n"
+        "-# OOC-Wissen darf nicht genutzt werden, um sich ingame Vorteile zu verschaffen.\n\n"
         "❌ **KEIN** Gambo-Talk\n"
-        "Kein Reden über Schießereien, Taktiken oder ähnliche Action-Themen.\n\n"
+        "-# Kein Reden über Schießereien, Taktiken oder ähnliche Action-Themen.\n\n"
         "Wer etwas IC klären oder wissen möchte, macht dies **ingame** – nicht hier."
     )
 
