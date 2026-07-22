@@ -581,6 +581,16 @@ async def neue_abstimmung_posten(guild, manual_channel=None, verwende_heute=Fals
         print("Aufstellungs-Channel nicht gefunden!")
         return
 
+    # Alte Aufstellungs-Nachricht im Channel löschen (Archiv bleibt unangetastet,
+    # das ist eine eigene Nachricht in einem eigenen Channel)
+    alte_msg_id = data.get("aktuelle_nachricht_id")
+    if alte_msg_id:
+        try:
+            alte_msg = await kanal.fetch_message(int(alte_msg_id))
+            await alte_msg.delete()
+        except Exception:
+            pass  # War schon gelöscht oder nicht mehr auffindbar, macht nichts
+
     datum = get_heute_datum() if verwende_heute else get_morgen_datum()
     ziel_zeitpunkt = datetime.now(TIMEZONE) if verwende_heute else (datetime.now(TIMEZONE) + timedelta(days=1))
     data["abstimmung"]          = {}
