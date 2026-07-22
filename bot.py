@@ -43,7 +43,8 @@ def load_data():
         "channel_probewoche_erinnerung": 1528442210901557268,
         "verifizierungen": {},
         "channel_chat_hinweis": 1528463937149079642,
-        "ooc_hinweis_nachricht_id": None
+        "ooc_hinweis_nachricht_id": None,
+        "geplante_aufstellung_loeschungen": []
     }
 
 def save_data(data):
@@ -567,6 +568,43 @@ async def abgelaufene_abmeldungen_aufraeumen():
         save_data(data)
     return entfernte_uids
 
+# ─── ALTE AUFSTELLUNGS-NACHRICHT: VERZÖGERTE LÖSCHUNG (1h) ───────────────────
+async def alte_aufstellungen_aufraeumen():
+    """Löscht alte Aufstellungs-Nachrichten, deren geplante Löschzeit erreicht
+    ist. Das Archiv (channel_archiv) wird hiervon NIE berührt, da dort eine
+    komplett eigene Nachricht in einem eigenen Channel liegt."""
+    geplante = data.get("geplante_aufstellung_loeschungen", [])
+    if not geplante:
+        return
+    now = datetime.now(TIMEZONE)
+    verbleibend = []
+    for eintrag in geplante:
+        try:
+            faellig = datetime.fromisoformat(eintrag["loeschen_um"])
+        except Exception:
+            continue  # kaputter Eintrag, wird verworfen
+        if now < faellig:
+            verbleibend.append(eintrag)
+            continue
+        geloescht = False
+        for guild in bot.guilds:
+            kanal = guild.get_channel(int(eintrag["channel_id"]))
+            if not kanal:
+                continue
+            try:
+                msg = await kanal.fetch_message(int(eintrag["message_id"]))
+                await msg.delete()
+            except Exception:
+                pass  # war schon gelöscht oder nicht mehr auffindbar
+            geloescht = True
+            break
+        if not geloescht:
+            # Guild/Channel gerade nicht erreichbar -> später nochmal versuchen
+            verbleibend.append(eintrag)
+    if len(verbleibend) != len(geplante):
+        data["geplante_aufstellung_loeschungen"] = verbleibend
+        save_data(data)
+
 # ─── NEUE ABSTIMMUNG POSTEN ───────────────────────────────────────────────────
 async def neue_abstimmung_posten(guild, manual_channel=None, verwende_heute=False):
     if manual_channel:
@@ -581,15 +619,17 @@ async def neue_abstimmung_posten(guild, manual_channel=None, verwende_heute=Fals
         print("Aufstellungs-Channel nicht gefunden!")
         return
 
-    # Alte Aufstellungs-Nachricht im Channel löschen (Archiv bleibt unangetastet,
-    # das ist eine eigene Nachricht in einem eigenen Channel)
+    # Alte Aufstellungs-Nachricht NICHT sofort löschen, sondern für die
+    # automatische Löschung in 1 Stunde vormerken. Das Archiv bleibt unangetastet.
     alte_msg_id = data.get("aktuelle_nachricht_id")
     if alte_msg_id:
-        try:
-            alte_msg = await kanal.fetch_message(int(alte_msg_id))
-            await alte_msg.delete()
-        except Exception:
-            pass  # War schon gelöscht oder nicht mehr auffindbar, macht nichts
+        geplante = data.setdefault("geplante_aufstellung_loeschungen", [])
+        geplante.append({
+            "channel_id": kanal.id,
+            "message_id": alte_msg_id,
+            "loeschen_um": (datetime.now(TIMEZONE) + timedelta(hours=1)).isoformat()
+        })
+        save_data(data)
 
     datum = get_heute_datum() if verwende_heute else get_morgen_datum()
     ziel_zeitpunkt = datetime.now(TIMEZONE) if verwende_heute else (datetime.now(TIMEZONE) + timedelta(days=1))
@@ -762,6 +802,9 @@ async def check_zeit():
                 await update_nachricht(guild)
             await update_abmeldung_liste(guild)
         print(f"🧹 {len(entfernte)} abgelaufene Abmeldung(en) automatisch entfernt.")
+
+    # Alte Aufstellungs-Nachrichten löschen, deren 1h-Frist abgelaufen ist
+    await alte_aufstellungen_aufraeumen()
 
     tage_config = data.get("aufstellung_tage_config", {})
 
