@@ -84,6 +84,31 @@ async def get_rolle_mitglieder(guild):
         return []
     return [m for m in rolle.members if not m.bot]
 
+# ─── DATUMS-HILFSFUNKTIONEN (Abmeldungen) ─────────────────────────────────────
+DATUM_REGEX = re.compile(r"^(\d{1,2})\.(\d{1,2})\.(\d{4})$")
+
+def parse_datum(datum_str):
+    """Parst ein Datum im Format TT.MM.JJJJ (auch ohne führende Nullen), sonst None."""
+    m = DATUM_REGEX.match(str(datum_str).strip())
+    if not m:
+        return None
+    tag, monat, jahr = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    try:
+        return datetime(jahr, monat, tag)
+    except ValueError:
+        return None
+
+def ist_abmeldung_aktiv(info):
+    """True, wenn der abgemeldete Zeitraum HEUTE bereits läuft (von <= heute <= bis).
+    Kann eines der Daten nicht ausgewertet werden, wird sicherheitshalber
+    'aktiv' angenommen (altes Verhalten), damit nichts verloren geht."""
+    heute = datetime.now(TIMEZONE).date()
+    von_datum = parse_datum(info.get("von", ""))
+    bis_datum = parse_datum(info.get("bis", ""))
+    if von_datum and bis_datum:
+        return von_datum.date() <= heute <= bis_datum.date()
+    return True
+
 def build_embed(datum, mitglieder, eingefroren=False):
     abstimmung  = data.get("abstimmung", {})
     abmeldungen = data.get("abmeldungen", {})
@@ -101,7 +126,8 @@ def build_embed(datum, mitglieder, eingefroren=False):
     for m in mitglieder:
         uid     = str(m.id)
         mention = m.mention
-        if uid in abmeldungen:
+        abmeldung_info = abmeldungen.get(uid)
+        if abmeldung_info and ist_abmeldung_aktiv(abmeldung_info):
             abgemeldet_liste.append(mention)
         elif uid in abstimmung:
             status = abstimmung[uid]
@@ -219,10 +245,10 @@ class AbmeldungModal(discord.ui.Modal, title="Abmeldung"):
         label="Name", placeholder="Wer meldet sich ab?", required=True, max_length=32
     )
     von_input = discord.ui.TextInput(
-        label="Von wann?", placeholder="14.07.2026", required=True, max_length=32
+        label="Von wann? (TT.MM.JJJJ)", placeholder="14.07.2026", required=True, max_length=32
     )
     bis_input = discord.ui.TextInput(
-        label="Bis wann?", placeholder="16.07.2026", required=True, max_length=32
+        label="Bis wann? (TT.MM.JJJJ)", placeholder="16.07.2026", required=True, max_length=32
     )
     grund_input = discord.ui.TextInput(
         label="Begründung", placeholder="Grund der Abmeldung", required=True,
@@ -244,21 +270,37 @@ class AbmeldungModal(discord.ui.Modal, title="Abmeldung"):
         bis   = self.bis_input.value.strip()
         grund = self.grund_input.value.strip()
 
+        von_datum = parse_datum(von)
+        bis_datum = parse_datum(bis)
+        if not von_datum or not bis_datum:
+            await interaction.response.send_message(
+                "❌ Ungültiges Datumsformat. Bitte **TT.MM.JJJJ** verwenden, z.B. `14.07.2026`.",
+                ephemeral=True
+            )
+            return
+        if bis_datum < von_datum:
+            await interaction.response.send_message(
+                "❌ Das Enddatum darf nicht vor dem Startdatum liegen.", ephemeral=True
+            )
+            return
+
+        von, bis = von_datum.strftime("%d.%m.%Y"), bis_datum.strftime("%d.%m.%Y")
+
         uid = str(interaction.user.id)
         data["abmeldungen"][uid] = {"name": name, "von": von, "bis": bis, "grund": grund, "typ": "kurzzeit"}
-        data["abstimmung"].pop(uid, None)
         save_data(data)
 
         if not data.get("eingefroren"):
             await update_nachricht(interaction.guild)
         await update_abmeldung_liste(interaction.guild)
 
+        aktiv_hinweis = "" if ist_abmeldung_aktiv(data["abmeldungen"][uid]) else \
+            "\nℹ️ Dein Zeitraum beginnt erst später – bis dahin wirst du weiterhin normal in der Aufstellung geführt und kannst abstimmen."
         await interaction.response.send_message(
             f"✅ Abmeldung eingetragen!\n"
             f"Name: **{name}**\n"
             f"Von: **{von}**\n"
-            f"Bis: **{bis}**\n"
-            f"Du wirst in der Aufstellung als Abgemeldet angezeigt.",
+            f"Bis: **{bis}**{aktiv_hinweis}",
             ephemeral=True
         )
 
@@ -356,9 +398,22 @@ class VerifizierungModal(discord.ui.Modal, title="Verifizierung: IC-Name & Numme
             except discord.Forbidden:
                 nicht_vergeben.append(f"{name} (keine Berechtigung)")
 
+        name_fehler = None
+        try:
+            await interaction.user.edit(nick=self.ic_name.value.strip())
+        except discord.Forbidden:
+            name_fehler = (
+                "Servername konnte nicht geändert werden (keine Berechtigung – "
+                "z.B. bei Server-Inhaber:innen oder wenn deine höchste Rolle über der Bot-Rolle liegt)."
+            )
+        except Exception as e:
+            name_fehler = f"Servername konnte nicht geändert werden: {e}"
+
         antwort = "✅ Verifizierung abgeschlossen! Deine Probewoche beginnt jetzt."
         if nicht_vergeben:
             antwort += "\n⚠️ Diese Rollen konnten nicht vergeben werden: " + ", ".join(nicht_vergeben)
+        if name_fehler:
+            antwort += f"\n⚠️ {name_fehler}"
         await interaction.response.send_message(antwort, ephemeral=True)
 
         if data.get("channel_verifizierung_log"):
@@ -427,13 +482,6 @@ async def update_nachricht(guild):
         print(f"Fehler beim Update der Nachricht: {e}")
 
 # ─── ABMELDUNGS-ÜBERSICHT (persistente Liste) ────────────────────────────────
-def parse_datum(datum_str):
-    """Versucht ein Datum im Format TT.MM.JJJJ zu parsen, sonst None."""
-    try:
-        return datetime.strptime(str(datum_str).strip(), "%d.%m.%Y")
-    except Exception:
-        return None
-
 def build_abmeldung_liste_embed(guild):
     abmeldungen = data.get("abmeldungen", {})
     embed = discord.Embed(
@@ -447,8 +495,8 @@ def build_abmeldung_liste_embed(guild):
         embed.timestamp = datetime.now(TIMEZONE)
         return embed
 
-    # Sortierung: wer zuerst wieder zurück ist (frühestes "Bis"-Datum), steht oben.
-    # Nicht parsbare Daten landen ans Ende.
+    # Sortierung: wer zuerst wieder zurück ist (frühestes "Bis"-Datum), steht oben,
+    # wer am längsten weg bleibt, steht unten. Nicht parsbare Daten landen ans Ende.
     def sort_key(item):
         _, info = item
         parsed = parse_datum(info.get("bis", ""))
@@ -467,11 +515,13 @@ def build_abmeldung_liste_embed(guild):
         von       = info.get("von", "-")
         bis       = info.get("bis", "-")
         grund     = info.get("grund", "-")
+        status    = "🟢 Aktiv" if ist_abmeldung_aktiv(info) else "⏳ Bevorstehend"
 
         block = (
-            f"{mention}  ·  {typ_label}\n"
+            f"{mention}  ·  {typ_label}  ·  {status}\n"
             f"Name: **{name}**\n"
-            f"Von: **{von}**  Bis: **{bis}**  Grund: {grund}"
+            f"Von: **{von}**  Bis: **{bis}**\n"
+            f"Grund: {grund}"
         )
         bloecke.append(block)
 
@@ -498,6 +548,21 @@ async def update_abmeldung_liste(guild):
     msg = await kanal.send(embed=embed)
     data["abmeldung_liste_nachricht_id"] = str(msg.id)
     save_data(data)
+
+async def abgelaufene_abmeldungen_aufraeumen():
+    """Entfernt alle Abmeldungen, deren 'Bis'-Datum bereits vergangen ist.
+    Gibt die Liste der entfernten User-IDs zurück."""
+    abmeldungen = data.get("abmeldungen", {})
+    heute = datetime.now(TIMEZONE).date()
+    entfernte_uids = []
+    for uid, info in list(abmeldungen.items()):
+        bis_datum = parse_datum(info.get("bis", ""))
+        if bis_datum and bis_datum.date() < heute:
+            del abmeldungen[uid]
+            entfernte_uids.append(uid)
+    if entfernte_uids:
+        save_data(data)
+    return entfernte_uids
 
 # ─── NEUE ABSTIMMUNG POSTEN ───────────────────────────────────────────────────
 async def neue_abstimmung_posten(guild, manual_channel=None, verwende_heute=False):
@@ -675,6 +740,15 @@ async def check_zeit():
     # OOC-Regelhinweis exakt zur vollen Stunde (16:00, 17:00, ...)
     if m == 0:
         await ooc_hinweis_senden()
+
+    # Abgelaufene Abmeldungen automatisch entfernen
+    entfernte = await abgelaufene_abmeldungen_aufraeumen()
+    if entfernte:
+        for guild in bot.guilds:
+            if not data.get("eingefroren"):
+                await update_nachricht(guild)
+            await update_abmeldung_liste(guild)
+        print(f"🧹 {len(entfernte)} abgelaufene Abmeldung(en) automatisch entfernt.")
 
     tage_config = data.get("aufstellung_tage_config", {})
 
@@ -978,8 +1052,8 @@ async def status(interaction: discord.Interaction):
 
 @tree.command(name="abmelden", description="Melde dich von der Aufstellung ab")
 @app_commands.describe(
-    von="Von wann? (z.B. 14.07.2026)",
-    bis="Bis wann? (z.B. 16.07.2026)",
+    von="Von wann? (TT.MM.JJJJ, z.B. 14.07.2026)",
+    bis="Bis wann? (TT.MM.JJJJ, z.B. 16.07.2026)",
     grund="Grund (intern, nicht öffentlich sichtbar)"
 )
 async def abmelden(interaction: discord.Interaction, von: str, bis: str, grund: str):
@@ -992,20 +1066,34 @@ async def abmelden(interaction: discord.Interaction, von: str, bis: str, grund: 
             )
             return
 
+    von_datum = parse_datum(von)
+    bis_datum = parse_datum(bis)
+    if not von_datum or not bis_datum:
+        await interaction.response.send_message(
+            "❌ Ungültiges Datumsformat. Bitte **TT.MM.JJJJ** verwenden, z.B. `14.07.2026`.", ephemeral=True
+        )
+        return
+    if bis_datum < von_datum:
+        await interaction.response.send_message(
+            "❌ Das Enddatum darf nicht vor dem Startdatum liegen.", ephemeral=True
+        )
+        return
+    von, bis = von_datum.strftime("%d.%m.%Y"), bis_datum.strftime("%d.%m.%Y")
+
     uid = str(interaction.user.id)
     data["abmeldungen"][uid] = {"von": von, "bis": bis, "grund": grund, "typ": "kurzzeit"}
-    data["abstimmung"].pop(uid, None)
     save_data(data)
 
     if not data.get("eingefroren"):
         await update_nachricht(interaction.guild)
     await update_abmeldung_liste(interaction.guild)
 
+    aktiv_hinweis = "" if ist_abmeldung_aktiv(data["abmeldungen"][uid]) else \
+        "\nℹ️ Dein Zeitraum beginnt erst später – bis dahin wirst du weiterhin normal in der Aufstellung geführt und kannst abstimmen."
     await interaction.response.send_message(
         f"✅ Abmeldung eingetragen!\n"
         f"Von: **{von}**\n"
-        f"Bis: **{bis}**\n"
-        f"Du wirst in der Aufstellung als Abgemeldet angezeigt.",
+        f"Bis: **{bis}**{aktiv_hinweis}",
         ephemeral=True
     )
 
@@ -1023,8 +1111,8 @@ async def abmelden(interaction: discord.Interaction, von: str, bis: str, grund: 
 
 @tree.command(name="abmeldung_langzeit", description="Trägt eine Langzeit-Abmeldung ein (Zeitraum länger als eine Woche)")
 @app_commands.describe(
-    von="Von wann? (z.B. 14.07.2026)",
-    bis="Bis wann? (z.B. 25.08.2026)",
+    von="Von wann? (TT.MM.JJJJ, z.B. 14.07.2026)",
+    bis="Bis wann? (TT.MM.JJJJ, z.B. 25.08.2026)",
     grund="Grund der Langzeit-Abmeldung"
 )
 async def abmeldung_langzeit(interaction: discord.Interaction, von: str, bis: str, grund: str):
@@ -1037,20 +1125,34 @@ async def abmeldung_langzeit(interaction: discord.Interaction, von: str, bis: st
             )
             return
 
+    von_datum = parse_datum(von)
+    bis_datum = parse_datum(bis)
+    if not von_datum or not bis_datum:
+        await interaction.response.send_message(
+            "❌ Ungültiges Datumsformat. Bitte **TT.MM.JJJJ** verwenden, z.B. `14.07.2026`.", ephemeral=True
+        )
+        return
+    if bis_datum < von_datum:
+        await interaction.response.send_message(
+            "❌ Das Enddatum darf nicht vor dem Startdatum liegen.", ephemeral=True
+        )
+        return
+    von, bis = von_datum.strftime("%d.%m.%Y"), bis_datum.strftime("%d.%m.%Y")
+
     uid = str(interaction.user.id)
     data["abmeldungen"][uid] = {"von": von, "bis": bis, "grund": grund, "typ": "langzeit"}
-    data["abstimmung"].pop(uid, None)
     save_data(data)
 
     if not data.get("eingefroren"):
         await update_nachricht(interaction.guild)
     await update_abmeldung_liste(interaction.guild)
 
+    aktiv_hinweis = "" if ist_abmeldung_aktiv(data["abmeldungen"][uid]) else \
+        "\nℹ️ Dein Zeitraum beginnt erst später – bis dahin wirst du weiterhin normal in der Aufstellung geführt und kannst abstimmen."
     await interaction.response.send_message(
         f"✅ Langzeit-Abmeldung eingetragen!\n"
         f"Von: **{von}**\n"
-        f"Bis: **{bis}**\n"
-        f"Du wirst in der Aufstellung als Abgemeldet angezeigt.",
+        f"Bis: **{bis}**{aktiv_hinweis}",
         ephemeral=True
     )
 
@@ -1089,7 +1191,7 @@ async def abmeldung_loeschen(interaction: discord.Interaction, mitglied: discord
 async def on_ready():
     print(f"Bot online: {bot.user}")
 
-    # ── SYNC MIT LOGGING (NEU) ─────────────────────────────────────────────
+    # ── SYNC MIT LOGGING ─────────────────────────────────────────────
     # Guild-Sync = SOFORT sichtbar (nur auf deinem Server, super zum Testen)
     # Global-Sync = kann bis zu 1h dauern, dafür auf allen Servern
     try:
@@ -1105,7 +1207,7 @@ async def on_ready():
         print(f"✅ {len(synced_global)} Commands global gesynct: {[c.name for c in synced_global]}")
     except Exception as e:
         print(f"❌ FEHLER beim Sync: {e}")
-    # ─────────────────────────────────────────────────────────────────────
+    # ─────────────────────────────────────────────────────────────────
 
     bot.add_view(AufstellungView())
     bot.add_view(AbmeldungButtonView())
@@ -1127,7 +1229,7 @@ async def on_ready():
                 print("✅ Abmeldungs-Übersicht nachträglich gepostet/aktualisiert.")
         except Exception as e:
             print(f"❌ Fehler beim Auto-Posten fehlender Nachrichten: {e}")
-    # ─────────────────────────────────────────────────────────────────────
+    # ─────────────────────────────────────────────────────────────────
 
     check_zeit.start()
     print("Tasks gestartet. Bot ist bereit!")
