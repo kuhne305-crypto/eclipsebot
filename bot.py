@@ -85,14 +85,17 @@ async def get_rolle_mitglieder(guild):
     return [m for m in rolle.members if not m.bot]
 
 # ─── DATUMS-HILFSFUNKTIONEN (Abmeldungen) ─────────────────────────────────────
-DATUM_REGEX = re.compile(r"^(\d{1,2})\.(\d{1,2})\.(\d{4})$")
+DATUM_REGEX = re.compile(r"^(\d{1,2})\.(\d{1,2})\.(\d{2}|\d{4})$")
 
 def parse_datum(datum_str):
-    """Parst ein Datum im Format TT.MM.JJJJ (auch ohne führende Nullen), sonst None."""
+    """Parst ein Datum im Format TT.MM.JJJJ oder TT.MM.JJ (auch ohne führende
+    Nullen), sonst None. Ein 2-stelliges Jahr wird als 20XX interpretiert."""
     m = DATUM_REGEX.match(str(datum_str).strip())
     if not m:
         return None
     tag, monat, jahr = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    if jahr < 100:
+        jahr += 2000
     try:
         return datetime(jahr, monat, tag)
     except ValueError:
