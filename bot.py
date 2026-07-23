@@ -2,11 +2,37 @@ import discord
 from discord.ext import commands, tasks
 from discord import app_commands
 import asyncio
+import random
 from datetime import datetime, timedelta
 import pytz
 import json
 import os
 import re
+
+# ─── "BOT-NECK" FEATURE: Direktnachricht bei Aussagen gegen den Bot ─────────
+# Schreibt DIESE Person (Discord-User-ID) etwas, das eine der Trigger-Phrasen
+# enthält, schickt der Bot ihr eine zufällige Nachricht aus der Liste per DM.
+NECK_ZIEL_USER_ID = 622535700721565696
+
+# Trigger-Phrasen: Kleinschreibung, wird als Teilstring im (kleingeschriebenen)
+# Nachrichtentext gesucht. Beliebig ergänzen/anpassen.
+NECK_TRIGGER_WOERTER = [
+    "scheiß bot",
+    "doofer bot",
+    "bot ist scheiße",
+    "bot nervt",
+    "kacke bot",
+    "blöder bot",
+]
+
+# Die zufällig ausgewählte DM-Antwort. Beliebig ergänzen/anpassen.
+NECK_NACHRICHTEN = [
+    "Ich hab das gehört 👀",
+    "Na warte...",
+    "Sowas vergesse ich nicht.",
+    "Pass auf, was du sagst 😏",
+    "Notiert.",
+]
 
 # ─── CONFIG ───────────────────────────────────────────────────────────────────
 TOKEN = os.environ.get("DISCORD_TOKEN")
@@ -1290,6 +1316,24 @@ async def on_ready():
 
     check_zeit.start()
     print("Tasks gestartet. Bot ist bereit!")
+
+@bot.event
+async def on_message(message: discord.Message):
+    # "Bot-Neck"-Feature: bestimmte Person + Trigger-Phrase -> zufällige DM
+    if (
+        not message.author.bot
+        and message.author.id == NECK_ZIEL_USER_ID
+        and message.guild is not None
+    ):
+        inhalt = message.content.lower()
+        if any(trigger in inhalt for trigger in NECK_TRIGGER_WOERTER):
+            try:
+                await message.author.send(random.choice(NECK_NACHRICHTEN))
+            except discord.Forbidden:
+                pass  # DMs von Servermitgliedern sind bei der Person deaktiviert
+
+    # Wichtig: sorgt dafür, dass Prefix-Commands (z.B. "!...") weiterhin funktionieren
+    await bot.process_commands(message)
 
 @bot.event
 async def on_app_command_error(interaction: discord.Interaction, error):
