@@ -790,8 +790,9 @@ async def check_zeit():
     heutiger_wochentag  = now.weekday()
     morgiger_wochentag  = (now + timedelta(days=1)).weekday()
 
-    # OOC-Regelhinweis exakt zur vollen Stunde (16:00, 17:00, ...)
-    if m == 0:
+    # OOC-Regelhinweis nur zu diesen festen Uhrzeiten: 4, 8, 12, 16, 20, 24(=0) Uhr
+    OOC_HINWEIS_STUNDEN = (0, 4, 8, 12, 16, 20)
+    if m == 0 and h in OOC_HINWEIS_STUNDEN:
         await ooc_hinweis_senden()
 
     # Abgelaufene Abmeldungen automatisch entfernen
