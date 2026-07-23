@@ -9,20 +9,17 @@ import json
 import os
 import re
 
-# ─── "BOT-NECK" FEATURE: Direktnachricht bei Aussagen gegen den Bot ─────────
-# Schreibt DIESE Person (Discord-User-ID) etwas, das eine der Trigger-Phrasen
-# enthält, schickt der Bot ihr eine zufällige Nachricht aus der Liste per DM.
-NECK_ZIEL_USER_ID = 622535700721565696
+# ─── "BOT-NECK" FEATURE: Direktnachricht bei Beleidigungen gegen den Bot ────
+# Reagiert auf JEDE Person im Server (nicht mehr nur auf eine bestimmte ID).
+# Erkennung ist bewusst breit: Nachricht enthält "bot" UND irgendein Wort aus
+# der Schimpfwortliste, unabhängig von Groß-/Kleinschreibung, Satzzeichen
+# (!,?,. etc.) und gängigen Schreibvarianten (z.B. "scheiss" vs. "scheiß").
 
-# Trigger-Phrasen: Kleinschreibung, wird als Teilstring im (kleingeschriebenen)
-# Nachrichtentext gesucht. Beliebig ergänzen/anpassen.
-NECK_TRIGGER_WOERTER = [
-    "scheiß bot",
-    "doofer bot",
-    "bot ist scheiße",
-    "bot nervt",
-    "kacke bot",
-    "blöder bot",
+# Schimpfwörter/Reizwörter — beliebig ergänzen/entfernen.
+NECK_SCHIMPFWOERTER = [
+    "scheiss", "scheiß", "kacke", "kack", "doof", "blöd", "bloed", "dumm",
+    "nervt", "nervig", "mist", "trottel", "idiot", "kaputt", "müll", "muell",
+    "schrott", "behindert", "assi", "peinlich", "unfähig", "unfaehig",
 ]
 
 # Die zufällig ausgewählte DM-Antwort. Beliebig ergänzen/anpassen.
@@ -34,9 +31,25 @@ NECK_NACHRICHTEN = [
     "Notiert.",
 ]
 
+def normalisiere_text(text: str) -> str:
+    """Kleinschreibung + Entfernen von Satzzeichen/Sonderzeichen,
+    damit die Erkennung unabhängig von Groß-/Kleinschreibung und
+    Satzzeichen funktioniert."""
+    text = text.lower()
+    text = re.sub(r"[^a-zäöüß\s]", " ", text)
+    return text
+
+def ist_beleidigung_gegen_bot(text: str) -> bool:
+    """True, wenn die Nachricht das Wort 'bot' UND mindestens ein
+    Schimpfwort enthält (Reihenfolge/Nähe der Wörter egal)."""
+    normalisiert = normalisiere_text(text)
+    if "bot" not in normalisiert:
+        return False
+    return any(wort in normalisiert for wort in NECK_SCHIMPFWOERTER)
+
 # ─── CONFIG ───────────────────────────────────────────────────────────────────
 TOKEN = os.environ.get("DISCORD_TOKEN")
-GUILD_ID = os.environ.get("GUILD_ID")  # <-- NEU: deine Server-ID hier als Railway Variable eintragen!
+GUILD_ID = os.environ.get("GUILD_ID")  # <-- deine Server-ID hier als Railway Variable eintragen!
 TIMEZONE = pytz.timezone("Europe/Berlin")
 EMBED_COLOR = 0xFFD700  # Gelb
 DATA_DIR = "/data" if os.path.isdir("/data") else "."
@@ -525,8 +538,6 @@ def build_abmeldung_liste_embed(guild):
         embed.timestamp = datetime.now(TIMEZONE)
         return embed
 
-    # Sortierung: wer zuerst wieder zurück ist (frühestes "Bis"-Datum), steht oben,
-    # wer am längsten weg bleibt, steht unten. Nicht parsbare Daten landen ans Ende.
     def sort_key(item):
         _, info = item
         parsed = parse_datum(info.get("bis", ""))
@@ -608,7 +619,7 @@ async def alte_aufstellungen_aufraeumen():
         try:
             faellig = datetime.fromisoformat(eintrag["loeschen_um"])
         except Exception:
-            continue  # kaputter Eintrag, wird verworfen
+            continue
         if now < faellig:
             verbleibend.append(eintrag)
             continue
@@ -621,11 +632,10 @@ async def alte_aufstellungen_aufraeumen():
                 msg = await kanal.fetch_message(int(eintrag["message_id"]))
                 await msg.delete()
             except Exception:
-                pass  # war schon gelöscht oder nicht mehr auffindbar
+                pass
             geloescht = True
             break
         if not geloescht:
-            # Guild/Channel gerade nicht erreichbar -> später nochmal versuchen
             verbleibend.append(eintrag)
     if len(verbleibend) != len(geplante):
         data["geplante_aufstellung_loeschungen"] = verbleibend
@@ -645,8 +655,6 @@ async def neue_abstimmung_posten(guild, manual_channel=None, verwende_heute=Fals
         print("Aufstellungs-Channel nicht gefunden!")
         return
 
-    # Alte Aufstellungs-Nachricht NICHT sofort löschen, sondern für die
-    # automatische Löschung in 1 Stunde vormerken. Das Archiv bleibt unangetastet.
     alte_msg_id = data.get("aktuelle_nachricht_id")
     if alte_msg_id:
         geplante = data.setdefault("geplante_aufstellung_loeschungen", [])
@@ -792,14 +800,13 @@ async def ooc_hinweis_senden():
         if not kanal:
             continue
 
-        # Alte Hinweis-Nachricht löschen, bevor die neue gepostet wird
         alte_msg_id = data.get("ooc_hinweis_nachricht_id")
         if alte_msg_id:
             try:
                 alte_msg = await kanal.fetch_message(int(alte_msg_id))
                 await alte_msg.delete()
             except Exception:
-                pass  # War schon gelöscht oder nicht mehr auffindbar, macht nichts
+                pass
 
         try:
             neue_msg = await kanal.send(embed=build_ooc_hinweis_embed())
@@ -816,12 +823,10 @@ async def check_zeit():
     heutiger_wochentag  = now.weekday()
     morgiger_wochentag  = (now + timedelta(days=1)).weekday()
 
-    # OOC-Regelhinweis nur zu diesen festen Uhrzeiten: 4, 8, 12, 16, 20, 24(=0) Uhr
     OOC_HINWEIS_STUNDEN = (0, 4, 8, 12, 16, 20)
     if m == 0 and h in OOC_HINWEIS_STUNDEN:
         await ooc_hinweis_senden()
 
-    # Abgelaufene Abmeldungen automatisch entfernen
     entfernte = await abgelaufene_abmeldungen_aufraeumen()
     if entfernte:
         for guild in bot.guilds:
@@ -830,12 +835,10 @@ async def check_zeit():
             await update_abmeldung_liste(guild)
         print(f"🧹 {len(entfernte)} abgelaufene Abmeldung(en) automatisch entfernt.")
 
-    # Alte Aufstellungs-Nachrichten löschen, deren 1h-Frist abgelaufen ist
     await alte_aufstellungen_aufraeumen()
 
     tage_config = data.get("aufstellung_tage_config", {})
 
-    # Neue Aufstellung um 23:59 posten, nur wenn morgen ein aktivierter Aufstellungstag ist
     if h == 23 and m == 59:
         morgen_eintrag = tage_config.get(str(morgiger_wochentag), {})
         if morgen_eintrag.get("aktiv"):
@@ -843,7 +846,6 @@ async def check_zeit():
                 await neue_abstimmung_posten(guild)
             await asyncio.sleep(61)
 
-    # Einfrieren zur für HEUTE konfigurierten Uhrzeit, nur wenn heute aktiviert ist
     heute_eintrag = tage_config.get(str(heutiger_wochentag), {})
     if heute_eintrag.get("aktiv") and not data.get("eingefroren", False):
         try:
@@ -1032,7 +1034,7 @@ async def probezeit_beenden(interaction: discord.Interaction, mitglied: discord.
     uid = str(mitglied.id)
     verifizierungen = data.setdefault("verifizierungen", {})
     if uid in verifizierungen:
-        verifizierungen[uid]["erinnert"] = True  # verhindert die automatische 7-Tage-Erinnerung
+        verifizierungen[uid]["erinnert"] = True
         save_data(data)
 
     if entfernt:
@@ -1274,9 +1276,6 @@ async def abmeldung_loeschen(interaction: discord.Interaction, mitglied: discord
 async def on_ready():
     print(f"Bot online: {bot.user}")
 
-    # ── SYNC MIT LOGGING ─────────────────────────────────────────────
-    # Guild-Sync = SOFORT sichtbar (nur auf deinem Server, super zum Testen)
-    # Global-Sync = kann bis zu 1h dauern, dafür auf allen Servern
     try:
         if GUILD_ID:
             guild_obj = discord.Object(id=int(GUILD_ID))
@@ -1290,15 +1289,11 @@ async def on_ready():
         print(f"✅ {len(synced_global)} Commands global gesynct: {[c.name for c in synced_global]}")
     except Exception as e:
         print(f"❌ FEHLER beim Sync: {e}")
-    # ─────────────────────────────────────────────────────────────────
 
     bot.add_view(AufstellungView())
     bot.add_view(AbmeldungButtonView())
     bot.add_view(VerifizierungButtonView())
 
-    # ── AUTO-POST FEHLENDER NACHRICHTEN ─────────────────────────────────────
-    # Falls ein Channel gesetzt ist (z.B. über die Standardwerte) aber die
-    # zugehörige Nachricht noch nie gepostet wurde, jetzt nachholen.
     for guild in bot.guilds:
         try:
             if data.get("channel_verifizierung") and not data.get("verifizierung_nachricht_id"):
@@ -1312,27 +1307,19 @@ async def on_ready():
                 print("✅ Abmeldungs-Übersicht nachträglich gepostet/aktualisiert.")
         except Exception as e:
             print(f"❌ Fehler beim Auto-Posten fehlender Nachrichten: {e}")
-    # ─────────────────────────────────────────────────────────────────
 
     check_zeit.start()
     print("Tasks gestartet. Bot ist bereit!")
 
 @bot.event
 async def on_message(message: discord.Message):
-    # "Bot-Neck"-Feature: bestimmte Person + Trigger-Phrase -> zufällige DM
-    if (
-        not message.author.bot
-        and message.author.id == NECK_ZIEL_USER_ID
-        and message.guild is not None
-    ):
-        inhalt = message.content.lower()
-        if any(trigger in inhalt for trigger in NECK_TRIGGER_WOERTER):
+    if not message.author.bot and message.guild is not None:
+        if ist_beleidigung_gegen_bot(message.content):
             try:
                 await message.author.send(random.choice(NECK_NACHRICHTEN))
             except discord.Forbidden:
-                pass  # DMs von Servermitgliedern sind bei der Person deaktiviert
+                pass
 
-    # Wichtig: sorgt dafür, dass Prefix-Commands (z.B. "!...") weiterhin funktionieren
     await bot.process_commands(message)
 
 @bot.event
