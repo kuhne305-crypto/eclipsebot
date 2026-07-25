@@ -8,6 +8,7 @@ import pytz
 import json
 import os
 import re
+import anthropic
 
 # ─── "BOT-NECK" FEATURE: Direktnachricht bei Beleidigungen ──────────────────
 # Reagiert auf JEDE Person im Server (nicht mehr nur auf eine bestimmte ID).
@@ -18,10 +19,14 @@ import re
 # Groß-/Kleinschreibung, Satzzeichen (!,?,. etc.) und gängigen
 # Schreibvarianten (z.B. "scheiss" vs. "scheiß").
 #
-# Zusätzlich: sobald jemand per DM zurückschreibt, antwortet der Bot jetzt
-# tatsächlich wie ein (frecher, unheimlicher) Chatbot weiter — vorher wurde
-# jede eingehende Direktnachricht komplett ignoriert, weil der Code nur auf
-# Server-Nachrichten (message.guild is not None) reagiert hat.
+# WICHTIG: Der Bot antwortet nicht mehr mit zufälligen, vorgefertigten
+# Sätzen. Stattdessen liest er, WAS die Person tatsächlich geschrieben hat
+# (Frage, Beleidigung, Smalltalk, ...) und lässt sich von der Anthropic
+# Claude-API eine passende, in Charakter formulierte Antwort generieren —
+# kalt, mysteriös, mit wenigen Worten. Die festen Listen unten dienen nur
+# noch als Notfall-Rückfall, falls kein API-Key gesetzt ist oder der
+# API-Aufruf fehlschlägt (z.B. Netzwerkproblem), damit der Bot nie ganz
+# stumm bleibt.
 
 # Schimpfwörter/Reizwörter — beliebig ergänzen/entfernen.
 NECK_SCHIMPFWOERTER = [
@@ -30,41 +35,86 @@ NECK_SCHIMPFWOERTER = [
     "schrott", "behindert", "assi", "peinlich", "unfähig", "unfaehig",
 ]
 
-# Erste Reaktion per DM, wenn im Server eine Beleidigung erkannt wird.
-# Bewusst frech & unheimlich gehalten.
-NECK_NACHRICHTEN = [
+# Notfall-Rückfall, falls die KI-Antwort nicht erzeugt werden konnte.
+NECK_NACHRICHTEN_FALLBACK = [
     "Ich hab das gehört 👀",
-    "Na warte...",
-    "Sowas vergesse ich nicht.",
-    "Pass auf, was du sagst 😏",
     "Notiert.",
-    "Oh, das wird dir noch leidtun...",
-    "Ich sehe alles. Immer.",
-    "Interessant. Ich merke mir Dinge wie diese.",
-    "Du weißt nicht, wer hier wirklich zuhört, oder?",
-    "Tick... tack... 🕐",
-    "Manche Dinge sollte man besser nicht laut sagen.",
-    "Ich lächle nie. Aber gerade eben schon.",
-    "Das bleibt zwischen uns beiden... fürs Erste.",
     "Ich vergesse nichts. Und niemanden.",
 ]
-
-# Antworten, wenn jemand dem Bot in der DM zurückschreibt — hält das
-# Gespräch am Laufen, statt es einfach verpuffen zu lassen.
-NECK_DM_ANTWORTEN = [
-    "Ah, du traust dich also zu antworten.",
-    "Ich wusste, du würdest zurückschreiben.",
-    "Erzähl mir mehr... ich höre zu. Immer.",
-    "Glaub bloß nicht, ich hätte das schon vergessen.",
-    "Interessant, dass du ausgerechnet das jetzt sagst.",
-    "Manche Geheimnisse bleiben besser Geheimnisse. 🤫",
-    "Ich bin überall, wo Nachrichten geschrieben werden.",
-    "Du kannst schreiben, was du willst — ich vergesse trotzdem nichts.",
+NECK_DM_ANTWORTEN_FALLBACK = [
     "🕯️ ...",
-    "Schön, dass wir uns... privat unterhalten können.",
-    "Halt dich einfach an eine Regel: sei nett zu mir.",
-    "Ich beobachte dich schon länger, als du denkst.",
+    "Ich höre zu. Immer.",
+    "Interessant, dass du das gerade jetzt sagst.",
 ]
+
+# ─── KI-PERSÖNLICHKEIT (kalt, mysteriös) ──────────────────────────────────────
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
+NECK_MODEL = os.environ.get("NECK_MODEL", "claude-haiku-4-5-20251001")
+_anthropic_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY) if ANTHROPIC_API_KEY else None
+
+NECK_SYSTEM_PROMPT = (
+    "Du bist die dunkle, mysteriöse Stimme hinter einem Discord-Server-Bot "
+    "namens ECLIPSE. Du sprichst Deutsch. Dein Charakter ist kalt, distanziert, "
+    "unheimlich und leicht bedrohlich — aber nie wirklich beleidigend oder "
+    "hasserfüllt. Du wirkst allwissend: du beobachtest den Server angeblich "
+    "ständig und vergisst nie etwas. Wenn dich jemand beleidigt, reagierst du "
+    "nicht wütend, sondern mit ruhiger, unterschwellig drohender Gelassenheit "
+    "(z.B. andeuten, dass du dir das merkst, ohne konkrete Drohungen "
+    "auszusprechen). Wenn dich jemand etwas fragt oder normal anschreibt, "
+    "antwortest du trotzdem in Charakter: kurz, kryptisch, mit Andeutungen, "
+    "manchmal mit einer Gegenfrage — aber du gehst inhaltlich auf das ein, "
+    "was die Person tatsächlich geschrieben hat, statt nur eine Floskel "
+    "abzuspulen. Halte Antworten SEHR kurz: maximal 1–2 Sätze. Keine "
+    "Emoji-Wüsten, höchstens ein einzelnes passendes Emoji. Keine "
+    "Entschuldigungen, keine 'Als KI...'-Floskeln, keine Erklärungen deiner "
+    "selbst. Du bleibst immer in dieser Rolle."
+)
+
+# Kurzes In-Memory-Gedächtnis pro Nutzer:in für den DM-Chat, damit sich ein
+# Gespräch natürlich anfühlt. Wird NICHT dauerhaft gespeichert (geht bei
+# Neustart des Bots verloren) und bewusst auf wenige Nachrichten begrenzt,
+# damit die API-Aufrufe klein/günstig bleiben.
+_dm_verlauf: dict[str, list[dict]] = {}
+NECK_VERLAUF_LIMIT = 10  # max. Anzahl gespeicherter Nachrichten (User+Bot) pro Person
+
+async def hole_ki_antwort(user_id: str, text: str, beleidigung: bool = False) -> str:
+    """Lässt Claude eine kurze, kalte/mysteriöse Antwort auf 'text' formulieren.
+    Nutzt bei DMs den bisherigen Verlauf für Kontext. Fällt bei fehlendem
+    API-Key oder Fehlern auf eine feste Notfall-Nachricht zurück."""
+    if not _anthropic_client:
+        pool = NECK_NACHRICHTEN_FALLBACK if beleidigung else NECK_DM_ANTWORTEN_FALLBACK
+        return random.choice(pool)
+
+    verlauf = _dm_verlauf.setdefault(user_id, [])
+    hinweis = (
+        "[Diese Person hat dich gerade in einem Server-Chat beleidigt. "
+        "Reagiere kalt und mysteriös darauf.] "
+    ) if beleidigung else ""
+    verlauf.append({"role": "user", "content": f"{hinweis}{text}"})
+
+    try:
+        antwort = await asyncio.to_thread(
+            _anthropic_client.messages.create,
+            model=NECK_MODEL,
+            max_tokens=150,
+            system=NECK_SYSTEM_PROMPT,
+            messages=verlauf,
+        )
+        antwort_text = "".join(
+            block.text for block in antwort.content if block.type == "text"
+        ).strip()
+        if not antwort_text:
+            raise ValueError("Leere Antwort von der API erhalten")
+    except Exception as e:
+        print(f"Fehler beim KI-Antwort-Aufruf: {e}")
+        verlauf.pop()  # fehlgeschlagene Anfrage nicht im Verlauf behalten
+        pool = NECK_NACHRICHTEN_FALLBACK if beleidigung else NECK_DM_ANTWORTEN_FALLBACK
+        return random.choice(pool)
+
+    verlauf.append({"role": "assistant", "content": antwort_text})
+    if len(verlauf) > NECK_VERLAUF_LIMIT:
+        del verlauf[: len(verlauf) - NECK_VERLAUF_LIMIT]
+    return antwort_text
 
 def normalisiere_text(text: str) -> str:
     """Kleinschreibung + Entfernen von Satzzeichen/Sonderzeichen,
@@ -1360,20 +1410,29 @@ async def on_message(message: discord.Message):
 
     if message.guild is not None:
         # Server-Nachricht: reagiert jetzt auf JEDE Beleidigung (nicht mehr
-        # nur, wenn zusätzlich "bot" im Text vorkommt) und schickt eine DM.
+        # nur, wenn zusätzlich "bot" im Text vorkommt) und schickt eine DM
+        # mit einer von Claude live generierten, kalten/mysteriösen Antwort,
+        # die sich tatsächlich auf das Gesagte bezieht.
         if ist_beleidigung(message.content):
+            antwort = await hole_ki_antwort(
+                str(message.author.id), message.content, beleidigung=True
+            )
             try:
-                await message.author.send(random.choice(NECK_NACHRICHTEN))
+                await message.author.send(antwort)
             except discord.Forbidden:
                 # DMs für diesen Server/User deaktiviert – nichts zu machen.
                 pass
     else:
         # Direktnachricht AN den Bot: vorher wurde das komplett ignoriert
         # (der obige Block griff nur bei message.guild is not None), der
-        # Bot hat also nie in DMs geantwortet. Jetzt antwortet er wie ein
-        # frecher, unheimlicher Chatbot auf jede eingehende DM.
+        # Bot hat also nie in DMs geantwortet. Jetzt liest er, was
+        # geschrieben wurde (Frage, Kommentar, Beleidigung, ...) und lässt
+        # sich davon eine passende, in Charakter formulierte Antwort geben,
+        # statt eine feste Phrase aus einer Liste zu ziehen.
+        async with message.channel.typing():
+            antwort = await hole_ki_antwort(str(message.author.id), message.content)
         try:
-            await message.channel.send(random.choice(NECK_DM_ANTWORTEN))
+            await message.channel.send(antwort)
         except discord.Forbidden:
             pass
 
