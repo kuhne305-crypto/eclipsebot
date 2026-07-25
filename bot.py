@@ -9,11 +9,19 @@ import json
 import os
 import re
 
-# ─── "BOT-NECK" FEATURE: Direktnachricht bei Beleidigungen gegen den Bot ────
+# ─── "BOT-NECK" FEATURE: Direktnachricht bei Beleidigungen ──────────────────
 # Reagiert auf JEDE Person im Server (nicht mehr nur auf eine bestimmte ID).
-# Erkennung ist bewusst breit: Nachricht enthält "bot" UND irgendein Wort aus
-# der Schimpfwortliste, unabhängig von Groß-/Kleinschreibung, Satzzeichen
-# (!,?,. etc.) und gängigen Schreibvarianten (z.B. "scheiss" vs. "scheiß").
+# Die Erkennung prüft nur noch, ob die Nachricht IRGENDEIN Wort aus der
+# Schimpfwortliste enthält (das Wort "bot" muss NICHT mehr zusätzlich
+# vorkommen) — dadurch springt der Bot auf JEDE Beleidigung an, unabhängig
+# davon, ob er direkt angesprochen wird. Erkennung bleibt unabhängig von
+# Groß-/Kleinschreibung, Satzzeichen (!,?,. etc.) und gängigen
+# Schreibvarianten (z.B. "scheiss" vs. "scheiß").
+#
+# Zusätzlich: sobald jemand per DM zurückschreibt, antwortet der Bot jetzt
+# tatsächlich wie ein (frecher, unheimlicher) Chatbot weiter — vorher wurde
+# jede eingehende Direktnachricht komplett ignoriert, weil der Code nur auf
+# Server-Nachrichten (message.guild is not None) reagiert hat.
 
 # Schimpfwörter/Reizwörter — beliebig ergänzen/entfernen.
 NECK_SCHIMPFWOERTER = [
@@ -22,13 +30,40 @@ NECK_SCHIMPFWOERTER = [
     "schrott", "behindert", "assi", "peinlich", "unfähig", "unfaehig",
 ]
 
-# Die zufällig ausgewählte DM-Antwort. Beliebig ergänzen/anpassen.
+# Erste Reaktion per DM, wenn im Server eine Beleidigung erkannt wird.
+# Bewusst frech & unheimlich gehalten.
 NECK_NACHRICHTEN = [
     "Ich hab das gehört 👀",
     "Na warte...",
     "Sowas vergesse ich nicht.",
     "Pass auf, was du sagst 😏",
     "Notiert.",
+    "Oh, das wird dir noch leidtun...",
+    "Ich sehe alles. Immer.",
+    "Interessant. Ich merke mir Dinge wie diese.",
+    "Du weißt nicht, wer hier wirklich zuhört, oder?",
+    "Tick... tack... 🕐",
+    "Manche Dinge sollte man besser nicht laut sagen.",
+    "Ich lächle nie. Aber gerade eben schon.",
+    "Das bleibt zwischen uns beiden... fürs Erste.",
+    "Ich vergesse nichts. Und niemanden.",
+]
+
+# Antworten, wenn jemand dem Bot in der DM zurückschreibt — hält das
+# Gespräch am Laufen, statt es einfach verpuffen zu lassen.
+NECK_DM_ANTWORTEN = [
+    "Ah, du traust dich also zu antworten.",
+    "Ich wusste, du würdest zurückschreiben.",
+    "Erzähl mir mehr... ich höre zu. Immer.",
+    "Glaub bloß nicht, ich hätte das schon vergessen.",
+    "Interessant, dass du ausgerechnet das jetzt sagst.",
+    "Manche Geheimnisse bleiben besser Geheimnisse. 🤫",
+    "Ich bin überall, wo Nachrichten geschrieben werden.",
+    "Du kannst schreiben, was du willst — ich vergesse trotzdem nichts.",
+    "🕯️ ...",
+    "Schön, dass wir uns... privat unterhalten können.",
+    "Halt dich einfach an eine Regel: sei nett zu mir.",
+    "Ich beobachte dich schon länger, als du denkst.",
 ]
 
 def normalisiere_text(text: str) -> str:
@@ -39,12 +74,11 @@ def normalisiere_text(text: str) -> str:
     text = re.sub(r"[^a-zäöüß\s]", " ", text)
     return text
 
-def ist_beleidigung_gegen_bot(text: str) -> bool:
-    """True, wenn die Nachricht das Wort 'bot' UND mindestens ein
-    Schimpfwort enthält (Reihenfolge/Nähe der Wörter egal)."""
+def ist_beleidigung(text: str) -> bool:
+    """True, wenn die Nachricht mindestens ein Schimpfwort enthält.
+    Anders als vorher wird NICHT mehr zusätzlich verlangt, dass das Wort
+    'bot' vorkommt — der Bot springt so auf JEDE Beleidigung an."""
     normalisiert = normalisiere_text(text)
-    if "bot" not in normalisiert:
-        return False
     return any(wort in normalisiert for wort in NECK_SCHIMPFWOERTER)
 
 # ─── CONFIG ───────────────────────────────────────────────────────────────────
@@ -67,7 +101,7 @@ def load_data():
         "abmeldungen": {},
         "eingefroren": False,
         "aktuelles_datum": None,
-        "channel_aufstellung": 1526202329253019664,
+        "channel_aufstellung": 1530389206701051964,
         "channel_archiv": 1528440984869015552,
         "channel_abmeldung": 1528441264150810805,
         "channel_abmeldung_liste": 1526202329253019665,
@@ -784,6 +818,11 @@ def build_ooc_hinweis_embed():
         inline=False
     )
     embed.add_field(
+        name="❌ **KEINE** OOC Madness",
+        value="> Es ist und bleibt ein Spiel, bei dem wir alle gemeinsam Spaß haben wollen. Beleidigungen, Provokationen, unnötige Dramen oder persönliche Angriffe haben hier nichts zu suchen.",
+        inline=False
+    )
+    embed.add_field(
         name="💡 Merke",
         value="> Wer etwas IC klären oder wissen möchte, macht dies **ingame** – nicht hier.",
         inline=False
@@ -1313,12 +1352,30 @@ async def on_ready():
 
 @bot.event
 async def on_message(message: discord.Message):
-    if not message.author.bot and message.guild is not None:
-        if ist_beleidigung_gegen_bot(message.content):
+    # Eigene Nachrichten des Bots (z.B. seine eigenen Antworten) ignorieren,
+    # damit er sich nicht selbst triggert.
+    if message.author.bot:
+        await bot.process_commands(message)
+        return
+
+    if message.guild is not None:
+        # Server-Nachricht: reagiert jetzt auf JEDE Beleidigung (nicht mehr
+        # nur, wenn zusätzlich "bot" im Text vorkommt) und schickt eine DM.
+        if ist_beleidigung(message.content):
             try:
                 await message.author.send(random.choice(NECK_NACHRICHTEN))
             except discord.Forbidden:
+                # DMs für diesen Server/User deaktiviert – nichts zu machen.
                 pass
+    else:
+        # Direktnachricht AN den Bot: vorher wurde das komplett ignoriert
+        # (der obige Block griff nur bei message.guild is not None), der
+        # Bot hat also nie in DMs geantwortet. Jetzt antwortet er wie ein
+        # frecher, unheimlicher Chatbot auf jede eingehende DM.
+        try:
+            await message.channel.send(random.choice(NECK_DM_ANTWORTEN))
+        except discord.Forbidden:
+            pass
 
     await bot.process_commands(message)
 
