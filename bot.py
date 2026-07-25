@@ -151,7 +151,7 @@ def load_data():
         "abmeldungen": {},
         "eingefroren": False,
         "aktuelles_datum": None,
-        "channel_aufstellung": 1530389206701051964,
+        "channel_aufstellung": 1526202329253019664,
         "channel_archiv": 1528440984869015552,
         "channel_abmeldung": 1528441264150810805,
         "channel_abmeldung_liste": 1526202329253019665,
@@ -254,9 +254,11 @@ def build_embed(datum, mitglieder, eingefroren=False):
         uid     = str(m.id)
         mention = m.mention
         abmeldung_info = abmeldungen.get(uid)
-        if abmeldung_info and ist_abmeldung_aktiv(abmeldung_info):
-            abgemeldet_liste.append(mention)
-        elif uid in abstimmung:
+        # Wer trotz Abmeldung aktiv abgestimmt hat, soll auch als das gezählt
+        # werden, was er/sie gewählt hat — die Abmeldung blockiert das
+        # Reagieren NICHT (vorher wurde eine gültige Stimme hier ignoriert
+        # und die Person immer zwangsweise unter "Abgemeldet" einsortiert).
+        if uid in abstimmung:
             status = abstimmung[uid]
             if status == "ja":
                 ja_liste.append(mention)
@@ -264,10 +266,12 @@ def build_embed(datum, mitglieder, eingefroren=False):
                 spaeter_liste.append(mention)
             elif status == "nein":
                 nein_liste.append(mention)
+        elif abmeldung_info and ist_abmeldung_aktiv(abmeldung_info):
+            abgemeldet_liste.append(mention)
         else:
             offen_liste.append(mention)
 
-    titel = "Aufstellung"
+    titel = "Meet Up"
     if eingefroren:
         titel += " *(Eingefroren)*"
 
@@ -275,7 +279,7 @@ def build_embed(datum, mitglieder, eingefroren=False):
         title=titel,
         description=(
             f"**{datum}**\n"
-            f"Aufstellung: **{anzeige_zeit} Uhr**\n"
+            f"Meet Up: **{anzeige_zeit} Uhr**\n"
             f"{'🔒 Abstimmung geschlossen!' if eingefroren else '✅ Jetzt abstimmen!'}"
         ),
         color=EMBED_COLOR
@@ -422,7 +426,7 @@ class AbmeldungModal(discord.ui.Modal, title="Abmeldung"):
         await update_abmeldung_liste(interaction.guild)
 
         aktiv_hinweis = "" if ist_abmeldung_aktiv(data["abmeldungen"][uid]) else \
-            "\nℹ️ Dein Zeitraum beginnt erst später – bis dahin wirst du weiterhin normal in der Aufstellung geführt und kannst abstimmen."
+            "\nℹ️ Dein Zeitraum beginnt erst später – bis dahin wirst du weiterhin normal im Meet Up geführt und kannst abstimmen."
         await interaction.response.send_message(
             f"✅ Abmeldung eingetragen!\n"
             f"Name: **{name}**\n"
@@ -732,11 +736,11 @@ async def neue_abstimmung_posten(guild, manual_channel=None, verwende_heute=Fals
     elif data.get("channel_aufstellung"):
         kanal = guild.get_channel(int(data["channel_aufstellung"]))
     else:
-        print("Kein Aufstellungs-Channel gesetzt! Bitte /set_aufstellung benutzen.")
+        print("Kein Meet Up-Channel gesetzt! Bitte /set_aufstellung benutzen.")
         return
 
     if not kanal:
-        print("Aufstellungs-Channel nicht gefunden!")
+        print("Meet Up-Channel nicht gefunden!")
         return
 
     alte_msg_id = data.get("aktuelle_nachricht_id")
@@ -950,7 +954,7 @@ async def check_zeit():
 
 # ─── SLASH COMMANDS ───────────────────────────────────────────────────────────
 
-@tree.command(name="setrolle", description="Setzt die Rolle die an der Aufstellung teilnimmt")
+@tree.command(name="setrolle", description="Setzt die Rolle die am Meet Up teilnimmt")
 @app_commands.describe(rolle="Die Rolle die gepingt und abgestimmt werden soll")
 @app_commands.checks.has_permissions(administrator=True)
 async def setrolle(interaction: discord.Interaction, rolle: discord.Role):
@@ -962,10 +966,10 @@ async def setrolle(interaction: discord.Interaction, rolle: discord.Role):
         ephemeral=True
     )
 
-@tree.command(name="aufstellungstag", description="Aktiviert/deaktiviert einen Wochentag für die Aufstellung und legt seine Uhrzeit fest")
+@tree.command(name="aufstellungstag", description="Aktiviert/deaktiviert einen Wochentag für das Meet Up und legt seine Uhrzeit fest")
 @app_commands.describe(
     tag="Wochentag",
-    aktiv="Soll an diesem Tag Aufstellung sein?",
+    aktiv="Soll an diesem Tag ein Meet Up sein?",
     uhrzeit="Uhrzeit im Format HH:MM (z.B. 19:30) – optional, wenn nur aktiv/inaktiv geändert wird"
 )
 @app_commands.choices(tag=[
@@ -1008,17 +1012,17 @@ async def aufstellungstage_uebersicht(interaction: discord.Interaction):
         zeilen.append(f"{symbol} **{name}** — {eintrag.get('uhrzeit', '20:00')} Uhr")
     await interaction.response.send_message("\n".join(zeilen), ephemeral=True)
 
-@tree.command(name="set_aufstellung", description="Setzt den Channel für die Aufstellungs-Abstimmung")
+@tree.command(name="set_aufstellung", description="Setzt den Channel für die Meet Up-Abstimmung")
 @app_commands.describe(channel="Der Channel wo die Abstimmung gepostet wird")
 @app_commands.checks.has_permissions(administrator=True)
 async def set_aufstellung(interaction: discord.Interaction, channel: discord.TextChannel):
     data["channel_aufstellung"] = channel.id
     save_data(data)
     await interaction.response.send_message(
-        f"✅ Aufstellungs-Channel gesetzt: {channel.mention}", ephemeral=True
+        f"✅ Meet Up-Channel gesetzt: {channel.mention}", ephemeral=True
     )
 
-@tree.command(name="set_archiv", description="Setzt den Channel für das Aufstellungs-Archiv")
+@tree.command(name="set_archiv", description="Setzt den Channel für das Meet Up-Archiv")
 @app_commands.describe(channel="Der Channel wo die archivierten Abstimmungen landen")
 @app_commands.checks.has_permissions(administrator=True)
 async def set_archiv(interaction: discord.Interaction, channel: discord.TextChannel):
@@ -1182,12 +1186,12 @@ async def channels_info(interaction: discord.Interaction):
     await interaction.response.send_message(
         f"**Aktuelle Einstellungen:**\n\n"
         f"Rolle:                 {rolle.mention        if rolle        else '❌ Nicht gesetzt – /setrolle benutzen'}\n"
-        f"Aufstellung:           {auf.mention          if auf          else '❌ Nicht gesetzt – /set_aufstellung benutzen'}\n"
+        f"Meet Up:               {auf.mention          if auf          else '❌ Nicht gesetzt – /set_aufstellung benutzen'}\n"
         f"Archiv:                {arch.mention         if arch         else '❌ Nicht gesetzt – /set_archiv benutzen'}\n"
         f"Abmeldung (Log):       {abm.mention          if abm          else '❌ Nicht gesetzt – /set_abmeldung benutzen'}\n"
         f"Abmeldungs-Liste:      {liste.mention        if liste        else '❌ Nicht gesetzt – /set_abmeldung_liste benutzen'}\n"
         f"Abmeldung-Button:      {button.mention       if button       else '❌ Nicht gesetzt – /set_abmeldung_button benutzen'}\n\n"
-        f"Aktive Aufstellungs-Tage: **{tage_text}**\n"
+        f"Aktive Meet Up-Tage: **{tage_text}**\n"
         f"(Details: /aufstellungstage)\n\n"
         f"Verifizierung-Channel: {verif.mention        if verif        else '❌ Nicht gesetzt – /set_verifizierung_channel benutzen'}\n"
         f"Verifizierung-Log:     {vlog.mention         if vlog         else '❌ Nicht gesetzt – /set_verifizierung_log benutzen'}\n"
@@ -1197,8 +1201,8 @@ async def channels_info(interaction: discord.Interaction):
         ephemeral=True
     )
 
-@tree.command(name="abstimmung", description="Postet manuell eine neue Aufstellungs-Abstimmung")
-@app_commands.describe(datum="Für welchen Tag gilt die Aufstellung? (Standard: Heute)")
+@tree.command(name="abstimmung", description="Postet manuell eine neue Meet Up-Abstimmung")
+@app_commands.describe(datum="Für welchen Tag gilt das Meet Up? (Standard: Heute)")
 @app_commands.choices(datum=[
     app_commands.Choice(name="Heute", value="heute"),
     app_commands.Choice(name="Morgen", value="morgen"),
@@ -1207,7 +1211,7 @@ async def channels_info(interaction: discord.Interaction):
 async def abstimmung_manuell(interaction: discord.Interaction, datum: app_commands.Choice[str] = None):
     if not data.get("channel_aufstellung"):
         await interaction.response.send_message(
-            "❌ Kein Aufstellungs-Channel gesetzt!\nBitte zuerst **/set_aufstellung #channel** benutzen.",
+            "❌ Kein Meet Up-Channel gesetzt!\nBitte zuerst **/set_aufstellung #channel** benutzen.",
             ephemeral=True
         )
         return
@@ -1224,7 +1228,7 @@ async def status(interaction: discord.Interaction):
     embed      = build_embed(datum, mitglieder, data.get("eingefroren", False))
     await interaction.response.send_message(embed=embed, ephemeral=True)
 
-@tree.command(name="abmelden", description="Melde dich von der Aufstellung ab")
+@tree.command(name="abmelden", description="Melde dich vom Meet Up ab")
 @app_commands.describe(
     von="Von wann? (TT.MM.JJJJ, z.B. 14.07.2026)",
     bis="Bis wann? (TT.MM.JJJJ, z.B. 16.07.2026)",
@@ -1263,7 +1267,7 @@ async def abmelden(interaction: discord.Interaction, von: str, bis: str, grund: 
     await update_abmeldung_liste(interaction.guild)
 
     aktiv_hinweis = "" if ist_abmeldung_aktiv(data["abmeldungen"][uid]) else \
-        "\nℹ️ Dein Zeitraum beginnt erst später – bis dahin wirst du weiterhin normal in der Aufstellung geführt und kannst abstimmen."
+        "\nℹ️ Dein Zeitraum beginnt erst später – bis dahin wirst du weiterhin normal im Meet Up geführt und kannst abstimmen."
     await interaction.response.send_message(
         f"✅ Abmeldung eingetragen!\n"
         f"Von: **{von}**\n"
@@ -1322,7 +1326,7 @@ async def abmeldung_langzeit(interaction: discord.Interaction, von: str, bis: st
     await update_abmeldung_liste(interaction.guild)
 
     aktiv_hinweis = "" if ist_abmeldung_aktiv(data["abmeldungen"][uid]) else \
-        "\nℹ️ Dein Zeitraum beginnt erst später – bis dahin wirst du weiterhin normal in der Aufstellung geführt und kannst abstimmen."
+        "\nℹ️ Dein Zeitraum beginnt erst später – bis dahin wirst du weiterhin normal im Meet Up geführt und kannst abstimmen."
     await interaction.response.send_message(
         f"✅ Langzeit-Abmeldung eingetragen!\n"
         f"Von: **{von}**\n"
