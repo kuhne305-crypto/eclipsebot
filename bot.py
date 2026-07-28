@@ -512,7 +512,7 @@ def get_stempel_eintrag(user_id: str):
     nutzer = data.setdefault("stempel_nutzer", {})
     if user_id not in nutzer:
         nutzer[user_id] = {
-            "eingestempelt_seit": None,
+            "Routenwache_seit": None,
             "gesamt_sekunden": 0,
             "anzahl": 0
         }
@@ -563,21 +563,21 @@ class StempelView(discord.ui.View):
         if eintrag["eingestempelt_seit"] is not None:
             await interaction.response.send_message("❌ Du bist schon auf Route.", ephemeral=True)
             return
-        eintrag["eingestempelt_seit"] = datetime.now(TIMEZONE).timestamp()
+        eintrag["Routenwache_seit"] = datetime.now(TIMEZONE).timestamp()
         save_data(data)
         await interaction.response.send_message("🟢 Bist drin. Viel Erfolg da draußen!", ephemeral=True)
 
     @discord.ui.button(label="RAUS", style=discord.ButtonStyle.danger, custom_id="btn_stempel_aus")
     async def btn_aus(self, interaction: discord.Interaction, button: discord.ui.Button):
-        eintrag = get_stempel_eintrag(str(interaction.user.id))
-        if eintrag["eingestempelt_seit"] is None:
+        eintrag = get_Routenwache_eintrag(str(interaction.user.id))
+        if eintrag["Routenwache_seit"] is None:
             await interaction.response.send_message("❌ Du bist gerade gar nicht auf Route.", ephemeral=True)
             return
 
-        dauer_sekunden = datetime.now(TIMEZONE).timestamp() - eintrag["eingestempelt_seit"]
+        dauer_sekunden = datetime.now(TIMEZONE).timestamp() - eintrag["Routenwache_seit"]
         eintrag["gesamt_sekunden"] += dauer_sekunden
         eintrag["anzahl"] += 1
-        eintrag["eingestempelt_seit"] = None
+        eintrag["Routenwache_seit"] = None
         save_data(data)
 
         await interaction.response.send_message(
@@ -585,19 +585,19 @@ class StempelView(discord.ui.View):
             f"Deine Gesamtzeit: **{format_dauer(eintrag['gesamt_sekunden'])}**",
             ephemeral=True
         )
-        await update_stempel_liste(interaction.guild)
+        await update_Routenwache_liste(interaction.guild)
 
-async def stempel_posten_intern(guild):
-    if not data.get("channel_stempel"):
+async def Routenwache_posten_intern(guild):
+    if not data.get("channel_Routenwache"):
         return
-    kanal = guild.get_channel(int(data["channel_stempel"]))
+    kanal = guild.get_channel(int(data["channel_Routenwache"]))
     if not kanal:
         return
 
     embed = build_stempel_embed()
     view  = StempelView()
 
-    msg_id = data.get("stempel_nachricht_id")
+    msg_id = data.get("Routenwache_nachricht_id")
     if msg_id:
         try:
             msg = await kanal.fetch_message(int(msg_id))
@@ -607,10 +607,10 @@ async def stempel_posten_intern(guild):
             print(f"Alte Routenwache-Nachricht nicht gefunden, poste neu: {e}")
 
     msg = await kanal.send(embed=embed, view=view)
-    data["stempel_nachricht_id"] = str(msg.id)
+    data["Routenwache_nachricht_id"] = str(msg.id)
     save_data(data)
 
-def build_stempel_liste_embed(guild):
+def build_Routenwache_liste_embed(guild):
     embed = discord.Embed(title="📊 Routenwache – Übersicht", color=EMBED_COLOR)
 
     eintraege = [
@@ -641,15 +641,15 @@ def build_stempel_liste_embed(guild):
     embed.timestamp = datetime.now(TIMEZONE)
     return embed
 
-async def update_stempel_liste(guild):
-    if not data.get("channel_stempel_liste"):
+async def update_Routenwache_liste(guild):
+    if not data.get("channel_Routenwache_liste"):
         return
-    kanal = guild.get_channel(int(data["channel_stempel_liste"]))
+    kanal = guild.get_channel(int(data["channel_Routenwache_liste"]))
     if not kanal:
         return
 
-    embed = build_stempel_liste_embed(guild)
-    msg_id = data.get("stempel_liste_nachricht_id")
+    embed = build_Routenwache_liste_embed(guild)
+    msg_id = data.get("Routenwache_liste_nachricht_id")
     if msg_id:
         try:
             msg = await kanal.fetch_message(int(msg_id))
@@ -659,7 +659,7 @@ async def update_stempel_liste(guild):
             print(f"Alte Routenwache-Übersicht nicht gefunden, poste neu: {e}")
 
     msg = await kanal.send(embed=embed)
-    data["stempel_liste_nachricht_id"] = str(msg.id)
+    data["Routenwache_liste_nachricht_id"] = str(msg.id)
     save_data(data)
 
 # ─── VERIFIZIERUNG (IC-Name, Nummer, Probewoche) ─────────────────────────────
