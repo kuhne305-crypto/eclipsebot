@@ -45,6 +45,8 @@ NECK_DM_ANTWORTEN_FALLBACK = [
     "🕯️ ...",
     "Ich höre zu. Immer.",
     "Interessant, dass du das gerade jetzt sagst.",
+    "hm...",
+    "Bald überlegst du 3x nach bevor du mir schreibst!",
 ]
 
 # ─── KI-PERSÖNLICHKEIT (kalt, mysteriös) ──────────────────────────────────────
