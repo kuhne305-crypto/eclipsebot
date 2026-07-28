@@ -503,9 +503,12 @@ async def abmeldung_button_posten_intern(guild):
     data["abmeldung_button_nachricht_id"] = str(msg.id)
     save_data(data)
 
-# ─── STEMPELSYSTEM (Ein-/Austempeln + Zeit-Übersicht) ────────────────────────
+# ─── ROUTENWACHE (Rein-/Raus-Tracking + Zeit-Übersicht) ──────────────────────
+# Intern heißen Variablen/Datenkeys noch "stempel_*" (alte Speicherstruktur
+# bleibt so erhalten, damit bereits erfasste Zeiten nicht verloren gehen),
+# nach außen (Embeds, Buttons, Befehle) heißt das Feature jetzt "Routenwache".
 def get_stempel_eintrag(user_id: str):
-    """Holt (oder erstellt) den Stempel-Eintrag eines Nutzers."""
+    """Holt (oder erstellt) den Routenwache-Eintrag eines Nutzers."""
     nutzer = data.setdefault("stempel_nutzer", {})
     if user_id not in nutzer:
         nutzer[user_id] = {
@@ -537,14 +540,13 @@ def hat_stempel_manager_rolle(interaction: discord.Interaction) -> bool:
 
 def build_stempel_embed():
     embed = discord.Embed(
-        title="🕐 Stempeluhr",
+        title="🛣️ Routenwache",
         description=(
-            "So funktioniert's:\n"
-            "🟢 **Einstempeln** – startet deine Zeiterfassung.\n"
-            "🔴 **Austempeln** – beendet deine Zeiterfassung, die vergangene Zeit wird "
-            "automatisch zu deiner Gesamtzeit addiert.\n\n"
-            f"Die Gesamtübersicht mit allen Zeiten findest du in <#{data.get('channel_stempel_liste')}>.\n"
-            "Vergiss nicht dich am Ende auch wieder auszustempeln!"
+            "Kurz und schmerzlos:\n"
+            "🟢 **Rein** – du bist ab jetzt auf Route, die Zeit läuft.\n"
+            "🔴 **Raus** – Feierabend, deine Zeit wird automatisch draufgerechnet.\n\n"
+            f"Die Gesamtübersicht mit allen Zeiten gibt's in <#{data.get('channel_stempel_liste')}>.\n"
+            "Und nicht vergessen wieder auszuchecken, sonst tickt die Uhr für immer weiter 😅"
         ),
         color=EMBED_COLOR
     )
@@ -555,21 +557,21 @@ class StempelView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="EINSTEMPELN", style=discord.ButtonStyle.success, custom_id="btn_stempel_ein")
+    @discord.ui.button(label="REIN", style=discord.ButtonStyle.success, custom_id="btn_stempel_ein")
     async def btn_ein(self, interaction: discord.Interaction, button: discord.ui.Button):
         eintrag = get_stempel_eintrag(str(interaction.user.id))
         if eintrag["eingestempelt_seit"] is not None:
-            await interaction.response.send_message("❌ Du bist bereits eingestempelt.", ephemeral=True)
+            await interaction.response.send_message("❌ Du bist schon auf Route.", ephemeral=True)
             return
         eintrag["eingestempelt_seit"] = datetime.now(TIMEZONE).timestamp()
         save_data(data)
-        await interaction.response.send_message("🟢 Du bist jetzt eingestempelt. Viel Erfolg!", ephemeral=True)
+        await interaction.response.send_message("🟢 Bist drin. Viel Erfolg da draußen!", ephemeral=True)
 
-    @discord.ui.button(label="AUSSTEMPELN", style=discord.ButtonStyle.danger, custom_id="btn_stempel_aus")
+    @discord.ui.button(label="RAUS", style=discord.ButtonStyle.danger, custom_id="btn_stempel_aus")
     async def btn_aus(self, interaction: discord.Interaction, button: discord.ui.Button):
         eintrag = get_stempel_eintrag(str(interaction.user.id))
         if eintrag["eingestempelt_seit"] is None:
-            await interaction.response.send_message("❌ Du bist gerade nicht eingestempelt.", ephemeral=True)
+            await interaction.response.send_message("❌ Du bist gerade gar nicht auf Route.", ephemeral=True)
             return
 
         dauer_sekunden = datetime.now(TIMEZONE).timestamp() - eintrag["eingestempelt_seit"]
@@ -579,7 +581,7 @@ class StempelView(discord.ui.View):
         save_data(data)
 
         await interaction.response.send_message(
-            f"🔴 Du bist jetzt ausgestempelt. Zeitraum: **{format_dauer(dauer_sekunden)}**\n"
+            f"🔴 Feierabend! Diese Runde: **{format_dauer(dauer_sekunden)}**\n"
             f"Deine Gesamtzeit: **{format_dauer(eintrag['gesamt_sekunden'])}**",
             ephemeral=True
         )
@@ -602,14 +604,14 @@ async def stempel_posten_intern(guild):
             await msg.edit(embed=embed, view=view)
             return
         except Exception as e:
-            print(f"Alte Stempel-Nachricht nicht gefunden, poste neu: {e}")
+            print(f"Alte Routenwache-Nachricht nicht gefunden, poste neu: {e}")
 
     msg = await kanal.send(embed=embed, view=view)
     data["stempel_nachricht_id"] = str(msg.id)
     save_data(data)
 
 def build_stempel_liste_embed(guild):
-    embed = discord.Embed(title="📊 Zeit-Statistik", color=EMBED_COLOR)
+    embed = discord.Embed(title="📊 Routenwache – Übersicht", color=EMBED_COLOR)
 
     eintraege = [
         (uid, info) for uid, info in data.get("stempel_nutzer", {}).items()
@@ -654,7 +656,7 @@ async def update_stempel_liste(guild):
             await msg.edit(embed=embed)
             return
         except Exception as e:
-            print(f"Alte Stempel-Listen-Nachricht nicht gefunden, poste neu: {e}")
+            print(f"Alte Routenwache-Übersicht nicht gefunden, poste neu: {e}")
 
     msg = await kanal.send(embed=embed)
     data["stempel_liste_nachricht_id"] = str(msg.id)
@@ -1376,8 +1378,8 @@ async def channels_info(interaction: discord.Interaction):
         f"Rollen nach Verify:    {' | '.join(verif_rollen_status)}\n"
         f"Probewoche-Erinnerung: {probe_ch.mention     if probe_ch     else '❌ Nicht gesetzt – /set_probewoche_channel benutzen'}\n"
         f"OOC-Regelhinweis:      {chat_ch.mention      if chat_ch      else '❌ Nicht gesetzt – /set_chat benutzen'}\n\n"
-        f"Stempeluhr:            {stempel_ch.mention        if stempel_ch        else '❌ Nicht gesetzt – /stempel_posten benutzen'}\n"
-        f"Stempel-Übersicht:     {stempel_liste_ch.mention  if stempel_liste_ch  else '❌ Nicht gesetzt'}",
+        f"Routenwache:           {stempel_ch.mention        if stempel_ch        else '❌ Nicht gesetzt – /stempel_posten benutzen'}\n"
+        f"Routenwache-Übersicht: {stempel_liste_ch.mention  if stempel_liste_ch  else '❌ Nicht gesetzt'}",
         ephemeral=True
     )
 
@@ -1544,15 +1546,15 @@ async def abmeldung_loeschen(interaction: discord.Interaction, mitglied: discord
             f"❌ **{mitglied.display_name}** hat keine aktive Abmeldung.", ephemeral=True
         )
 
-# ─── STEMPELSYSTEM SLASH COMMANDS ─────────────────────────────────────────────
+# ─── ROUTENWACHE SLASH COMMANDS ───────────────────────────────────────────────
 
-@tree.command(name="stempel_posten", description="Postet oder aktualisiert die Einstempeln/Austempeln-Nachricht")
+@tree.command(name="stempel_posten", description="Postet oder aktualisiert die Routenwache-Nachricht (Rein/Raus-Buttons)")
 @app_commands.checks.has_permissions(administrator=True)
 async def stempel_posten(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
     await stempel_posten_intern(interaction.guild)
     await update_stempel_liste(interaction.guild)
-    await interaction.followup.send("✅ Stempeluhr-Nachricht gepostet/aktualisiert.", ephemeral=True)
+    await interaction.followup.send("✅ Routenwache-Nachricht gepostet/aktualisiert.", ephemeral=True)
 
 @tree.command(name="zeit_hinzufuegen", description="Trägt manuell Zeit für ein Mitglied nach")
 @app_commands.describe(
@@ -1616,13 +1618,13 @@ async def zeit_entfernen(interaction: discord.Interaction, mitglied: discord.Mem
         ephemeral=True
     )
 
-@tree.command(name="meine_zeit", description="Zeigt deine eigene Stempel-Statistik")
+@tree.command(name="meine_zeit", description="Zeigt deinen eigenen Routenwache-Status")
 async def meine_zeit(interaction: discord.Interaction):
     eintrag = get_stempel_eintrag(str(interaction.user.id))
     save_data(data)
-    status_text = "🟢 aktuell eingestempelt" if eintrag["eingestempelt_seit"] else "🔴 aktuell ausgestempelt"
+    status_text = "🟢 gerade auf Route" if eintrag["eingestempelt_seit"] else "🔴 gerade nicht auf Route"
     await interaction.response.send_message(
-        f"**Deine Statistik**\n"
+        f"**Deine Routenwache**\n"
         f"Status: {status_text}\n"
         f"Gesamtzeit: **{format_dauer(eintrag['gesamt_sekunden'])}**\n"
         f"Zeiträume: **{eintrag['anzahl']}**",
@@ -1666,10 +1668,10 @@ async def on_ready():
                 print("✅ Abmeldungs-Übersicht nachträglich gepostet/aktualisiert.")
             if data.get("channel_stempel") and not data.get("stempel_nachricht_id"):
                 await stempel_posten_intern(guild)
-                print("✅ Stempeluhr-Nachricht nachträglich gepostet.")
+                print("✅ Routenwache-Nachricht nachträglich gepostet.")
             if data.get("channel_stempel_liste"):
                 await update_stempel_liste(guild)
-                print("✅ Stempel-Übersicht nachträglich gepostet/aktualisiert.")
+                print("✅ Routenwache-Übersicht nachträglich gepostet/aktualisiert.")
         except Exception as e:
             print(f"❌ Fehler beim Auto-Posten fehlender Nachrichten: {e}")
 
