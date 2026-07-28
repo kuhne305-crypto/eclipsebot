@@ -2,136 +2,11 @@ import discord
 from discord.ext import commands, tasks
 from discord import app_commands
 import asyncio
-import random
 from datetime import datetime, timedelta
 import pytz
 import json
 import os
 import re
-import anthropic
-
-# ─── "BOT-NECK" FEATURE: Direktnachricht bei Beleidigungen ──────────────────
-# Reagiert auf JEDE Person im Server (nicht mehr nur auf eine bestimmte ID).
-# Die Erkennung prüft nur noch, ob die Nachricht IRGENDEIN Wort aus der
-# Schimpfwortliste enthält (das Wort "bot" muss NICHT mehr zusätzlich
-# vorkommen) — dadurch springt der Bot auf JEDE Beleidigung an, unabhängig
-# davon, ob er direkt angesprochen wird. Erkennung bleibt unabhängig von
-# Groß-/Kleinschreibung, Satzzeichen (!,?,. etc.) und gängigen
-# Schreibvarianten (z.B. "scheiss" vs. "scheiß").
-#
-# WICHTIG: Der Bot antwortet nicht mehr mit zufälligen, vorgefertigten
-# Sätzen. Stattdessen liest er, WAS die Person tatsächlich geschrieben hat
-# (Frage, Beleidigung, Smalltalk, ...) und lässt sich von der Anthropic
-# Claude-API eine passende, in Charakter formulierte Antwort generieren —
-# kalt, mysteriös, mit wenigen Worten. Die festen Listen unten dienen nur
-# noch als Notfall-Rückfall, falls kein API-Key gesetzt ist oder der
-# API-Aufruf fehlschlägt (z.B. Netzwerkproblem), damit der Bot nie ganz
-# stumm bleibt.
-
-# Schimpfwörter/Reizwörter — beliebig ergänzen/entfernen.
-NECK_SCHIMPFWOERTER = [
-    "scheiss", "scheiß", "kacke", "kack", "doof", "blöd", "bloed", "dumm",
-    "nervt", "nervig", "mist", "trottel", "idiot", "kaputt", "müll", "muell",
-    "schrott", "behindert", "assi", "peinlich", "unfähig", "unfaehig",
-]
-
-# Notfall-Rückfall, falls die KI-Antwort nicht erzeugt werden konnte.
-NECK_NACHRICHTEN_FALLBACK = [
-    "Ich hab das gehört 👀",
-    "Notiert.",
-    "Ich vergesse nichts. Und niemanden.",
-]
-NECK_DM_ANTWORTEN_FALLBACK = [
-    "🕯️ ...",
-    "Ich höre zu. Immer.",
-    "Interessant, dass du das gerade jetzt sagst.",
-    "hm...",
-    "Bald überlegst du 3x nach bevor du mir schreibst!",
-]
-
-# ─── KI-PERSÖNLICHKEIT (kalt, mysteriös) ──────────────────────────────────────
-ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
-NECK_MODEL = os.environ.get("NECK_MODEL", "claude-haiku-4-5-20251001")
-_anthropic_client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY) if ANTHROPIC_API_KEY else None
-
-NECK_SYSTEM_PROMPT = (
-    "Du bist die dunkle, mysteriöse Stimme hinter einem Discord-Server-Bot "
-    "namens ECLIPSE. Du sprichst Deutsch. Dein Charakter ist kalt, distanziert, "
-    "unheimlich und leicht bedrohlich — aber nie wirklich beleidigend oder "
-    "hasserfüllt. Du wirkst allwissend: du beobachtest den Server angeblich "
-    "ständig und vergisst nie etwas. Wenn dich jemand beleidigt, reagierst du "
-    "nicht wütend, sondern mit ruhiger, unterschwellig drohender Gelassenheit "
-    "(z.B. andeuten, dass du dir das merkst, ohne konkrete Drohungen "
-    "auszusprechen). Wenn dich jemand etwas fragt oder normal anschreibt, "
-    "antwortest du trotzdem in Charakter: kurz, kryptisch, mit Andeutungen, "
-    "manchmal mit einer Gegenfrage — aber du gehst inhaltlich auf das ein, "
-    "was die Person tatsächlich geschrieben hat, statt nur eine Floskel "
-    "abzuspulen. Halte Antworten SEHR kurz: maximal 1–2 Sätze. Keine "
-    "Emoji-Wüsten, höchstens ein einzelnes passendes Emoji. Keine "
-    "Entschuldigungen, keine 'Als KI...'-Floskeln, keine Erklärungen deiner "
-    "selbst. Du bleibst immer in dieser Rolle."
-)
-
-# Kurzes In-Memory-Gedächtnis pro Nutzer:in für den DM-Chat, damit sich ein
-# Gespräch natürlich anfühlt. Wird NICHT dauerhaft gespeichert (geht bei
-# Neustart des Bots verloren) und bewusst auf wenige Nachrichten begrenzt,
-# damit die API-Aufrufe klein/günstig bleiben.
-_dm_verlauf: dict[str, list[dict]] = {}
-NECK_VERLAUF_LIMIT = 10  # max. Anzahl gespeicherter Nachrichten (User+Bot) pro Person
-
-async def hole_ki_antwort(user_id: str, text: str, beleidigung: bool = True) -> str:
-    """Lässt Claude eine kurze, kalte/mysteriöse Antwort auf 'text' formulieren.
-    Nutzt bei DMs den bisherigen Verlauf für Kontext. Fällt bei fehlendem
-    API-Key oder Fehlern auf eine feste Notfall-Nachricht zurück."""
-    if not _anthropic_client:
-        pool = NECK_NACHRICHTEN_FALLBACK if beleidigung else NECK_DM_ANTWORTEN_FALLBACK
-        return random.choice(pool)
-
-    verlauf = _dm_verlauf.setdefault(user_id, [])
-    hinweis = (
-        "[Diese Person hat dich gerade in einem Server-Chat beleidigt. "
-        "Reagiere kalt und mysteriös darauf.] "
-    ) if beleidigung else ""
-    verlauf.append({"role": "user", "content": f"{hinweis}{text}"})
-
-    try:
-        antwort = await asyncio.to_thread(
-            _anthropic_client.messages.create,
-            model=NECK_MODEL,
-            max_tokens=150,
-            system=NECK_SYSTEM_PROMPT,
-            messages=verlauf,
-        )
-        antwort_text = "".join(
-            block.text for block in antwort.content if block.type == "text"
-        ).strip()
-        if not antwort_text:
-            raise ValueError("Leere Antwort von der API erhalten")
-    except Exception as e:
-        print(f"Fehler beim KI-Antwort-Aufruf: {e}")
-        verlauf.pop()  # fehlgeschlagene Anfrage nicht im Verlauf behalten
-        pool = NECK_NACHRICHTEN_FALLBACK if beleidigung else NECK_DM_ANTWORTEN_FALLBACK
-        return random.choice(pool)
-
-    verlauf.append({"role": "assistant", "content": antwort_text})
-    if len(verlauf) > NECK_VERLAUF_LIMIT:
-        del verlauf[: len(verlauf) - NECK_VERLAUF_LIMIT]
-    return antwort_text
-
-def normalisiere_text(text: str) -> str:
-    """Kleinschreibung + Entfernen von Satzzeichen/Sonderzeichen,
-    damit die Erkennung unabhängig von Groß-/Kleinschreibung und
-    Satzzeichen funktioniert."""
-    text = text.lower()
-    text = re.sub(r"[^a-zäöüß\s]", " ", text)
-    return text
-
-def ist_beleidigung(text: str) -> bool:
-    """True, wenn die Nachricht mindestens ein Schimpfwort enthält.
-    Anders als vorher wird NICHT mehr zusätzlich verlangt, dass das Wort
-    'bot' vorkommt — der Bot springt so auf JEDE Beleidigung an."""
-    normalisiert = normalisiere_text(text)
-    return any(wort in normalisiert for wort in NECK_SCHIMPFWOERTER)
 
 # ─── CONFIG ───────────────────────────────────────────────────────────────────
 TOKEN = os.environ.get("DISCORD_TOKEN")
@@ -143,6 +18,18 @@ DATA_FILE = os.path.join(DATA_DIR, "data.json")
 
 # Stempelsystem
 STEMPEL_MANAGER_ROLLE_ID = 1526202327436886108   # darf Zeiten nachtragen/austragen
+
+# Leitung: darf ALLES bearbeiten (wie Admin) und alle Routenwache-Befehle nutzen,
+# auch ohne den Discord-Server-Berechtigung "Administrator".
+LEITUNG_ROLLE_ID = 1526202327483285629
+
+def ist_admin_oder_leitung(interaction: discord.Interaction) -> bool:
+    """True für echte Admins ODER Mitglieder mit der Leitungs-Rolle.
+    Wird als Ersatz für app_commands.checks.has_permissions(administrator=True)
+    bei allen Admin-Befehlen verwendet."""
+    if interaction.user.guild_permissions.administrator:
+        return True
+    return any(r.id == LEITUNG_ROLLE_ID for r in interaction.user.roles)
 
 # ─── DATA HANDLER ─────────────────────────────────────────────────────────────
 def load_data():
@@ -512,7 +399,7 @@ def get_stempel_eintrag(user_id: str):
     nutzer = data.setdefault("stempel_nutzer", {})
     if user_id not in nutzer:
         nutzer[user_id] = {
-            "Routenwache_seit": None,
+            "eingestempelt_seit": None,
             "gesamt_sekunden": 0,
             "anzahl": 0
         }
@@ -534,7 +421,7 @@ def format_dauer(sekunden) -> str:
     return " ".join(teile)
 
 def hat_stempel_manager_rolle(interaction: discord.Interaction) -> bool:
-    if interaction.user.guild_permissions.administrator:
+    if ist_admin_oder_leitung(interaction):
         return True
     return any(r.id == STEMPEL_MANAGER_ROLLE_ID for r in interaction.user.roles)
 
@@ -563,21 +450,21 @@ class StempelView(discord.ui.View):
         if eintrag["eingestempelt_seit"] is not None:
             await interaction.response.send_message("❌ Du bist schon auf Route.", ephemeral=True)
             return
-        eintrag["Routenwache_seit"] = datetime.now(TIMEZONE).timestamp()
+        eintrag["eingestempelt_seit"] = datetime.now(TIMEZONE).timestamp()
         save_data(data)
         await interaction.response.send_message("🟢 Bist drin. Viel Erfolg da draußen!", ephemeral=True)
 
     @discord.ui.button(label="RAUS", style=discord.ButtonStyle.danger, custom_id="btn_stempel_aus")
     async def btn_aus(self, interaction: discord.Interaction, button: discord.ui.Button):
-        eintrag = get_Routenwache_eintrag(str(interaction.user.id))
-        if eintrag["Routenwache_seit"] is None:
+        eintrag = get_stempel_eintrag(str(interaction.user.id))
+        if eintrag["eingestempelt_seit"] is None:
             await interaction.response.send_message("❌ Du bist gerade gar nicht auf Route.", ephemeral=True)
             return
 
-        dauer_sekunden = datetime.now(TIMEZONE).timestamp() - eintrag["Routenwache_seit"]
+        dauer_sekunden = datetime.now(TIMEZONE).timestamp() - eintrag["eingestempelt_seit"]
         eintrag["gesamt_sekunden"] += dauer_sekunden
         eintrag["anzahl"] += 1
-        eintrag["Routenwache_seit"] = None
+        eintrag["eingestempelt_seit"] = None
         save_data(data)
 
         await interaction.response.send_message(
@@ -585,19 +472,19 @@ class StempelView(discord.ui.View):
             f"Deine Gesamtzeit: **{format_dauer(eintrag['gesamt_sekunden'])}**",
             ephemeral=True
         )
-        await update_Routenwache_liste(interaction.guild)
+        await update_stempel_liste(interaction.guild)
 
-async def Routenwache_posten_intern(guild):
-    if not data.get("channel_Routenwache"):
+async def stempel_posten_intern(guild):
+    if not data.get("channel_stempel"):
         return
-    kanal = guild.get_channel(int(data["channel_Routenwache"]))
+    kanal = guild.get_channel(int(data["channel_stempel"]))
     if not kanal:
         return
 
     embed = build_stempel_embed()
     view  = StempelView()
 
-    msg_id = data.get("Routenwache_nachricht_id")
+    msg_id = data.get("stempel_nachricht_id")
     if msg_id:
         try:
             msg = await kanal.fetch_message(int(msg_id))
@@ -607,10 +494,10 @@ async def Routenwache_posten_intern(guild):
             print(f"Alte Routenwache-Nachricht nicht gefunden, poste neu: {e}")
 
     msg = await kanal.send(embed=embed, view=view)
-    data["Routenwache_nachricht_id"] = str(msg.id)
+    data["stempel_nachricht_id"] = str(msg.id)
     save_data(data)
 
-def build_Routenwache_liste_embed(guild):
+def build_stempel_liste_embed(guild):
     embed = discord.Embed(title="📊 Routenwache – Übersicht", color=EMBED_COLOR)
 
     eintraege = [
@@ -641,15 +528,15 @@ def build_Routenwache_liste_embed(guild):
     embed.timestamp = datetime.now(TIMEZONE)
     return embed
 
-async def update_Routenwache_liste(guild):
-    if not data.get("channel_Routenwache_liste"):
+async def update_stempel_liste(guild):
+    if not data.get("channel_stempel_liste"):
         return
-    kanal = guild.get_channel(int(data["channel_Routenwache_liste"]))
+    kanal = guild.get_channel(int(data["channel_stempel_liste"]))
     if not kanal:
         return
 
-    embed = build_Routenwache_liste_embed(guild)
-    msg_id = data.get("Routenwache_liste_nachricht_id")
+    embed = build_stempel_liste_embed(guild)
+    msg_id = data.get("stempel_liste_nachricht_id")
     if msg_id:
         try:
             msg = await kanal.fetch_message(int(msg_id))
@@ -659,7 +546,7 @@ async def update_Routenwache_liste(guild):
             print(f"Alte Routenwache-Übersicht nicht gefunden, poste neu: {e}")
 
     msg = await kanal.send(embed=embed)
-    data["Routenwache_liste_nachricht_id"] = str(msg.id)
+    data["stempel_liste_nachricht_id"] = str(msg.id)
     save_data(data)
 
 # ─── VERIFIZIERUNG (IC-Name, Nummer, Probewoche) ─────────────────────────────
@@ -1134,7 +1021,7 @@ async def check_zeit():
 
 @tree.command(name="setrolle", description="Setzt die Rolle die am Meet Up teilnimmt")
 @app_commands.describe(rolle="Die Rolle die gepingt und abgestimmt werden soll")
-@app_commands.checks.has_permissions(administrator=True)
+@app_commands.check(ist_admin_oder_leitung)
 async def setrolle(interaction: discord.Interaction, rolle: discord.Role):
     data["rolle_id"] = str(rolle.id)
     save_data(data)
@@ -1153,7 +1040,7 @@ async def setrolle(interaction: discord.Interaction, rolle: discord.Role):
 @app_commands.choices(tag=[
     app_commands.Choice(name=n, value=str(i)) for i, n in enumerate(WOCHENTAGE_NAMEN)
 ])
-@app_commands.checks.has_permissions(administrator=True)
+@app_commands.check(ist_admin_oder_leitung)
 async def aufstellungstag(interaction: discord.Interaction, tag: app_commands.Choice[str], aktiv: bool, uhrzeit: str = None):
     tag_key = tag.value
     config  = data.setdefault("aufstellung_tage_config", {})
@@ -1180,7 +1067,7 @@ async def aufstellungstag(interaction: discord.Interaction, tag: app_commands.Ch
     )
 
 @tree.command(name="aufstellungstage", description="Zeigt die Konfiguration aller Wochentage")
-@app_commands.checks.has_permissions(administrator=True)
+@app_commands.check(ist_admin_oder_leitung)
 async def aufstellungstage_uebersicht(interaction: discord.Interaction):
     config = data.get("aufstellung_tage_config", {})
     zeilen = []
@@ -1192,7 +1079,7 @@ async def aufstellungstage_uebersicht(interaction: discord.Interaction):
 
 @tree.command(name="set_aufstellung", description="Setzt den Channel für die Meet Up-Abstimmung")
 @app_commands.describe(channel="Der Channel wo die Abstimmung gepostet wird")
-@app_commands.checks.has_permissions(administrator=True)
+@app_commands.check(ist_admin_oder_leitung)
 async def set_aufstellung(interaction: discord.Interaction, channel: discord.TextChannel):
     data["channel_aufstellung"] = channel.id
     save_data(data)
@@ -1202,7 +1089,7 @@ async def set_aufstellung(interaction: discord.Interaction, channel: discord.Tex
 
 @tree.command(name="set_archiv", description="Setzt den Channel für das Meet Up-Archiv")
 @app_commands.describe(channel="Der Channel wo die archivierten Abstimmungen landen")
-@app_commands.checks.has_permissions(administrator=True)
+@app_commands.check(ist_admin_oder_leitung)
 async def set_archiv(interaction: discord.Interaction, channel: discord.TextChannel):
     data["channel_archiv"] = channel.id
     save_data(data)
@@ -1212,7 +1099,7 @@ async def set_archiv(interaction: discord.Interaction, channel: discord.TextChan
 
 @tree.command(name="set_abmeldung", description="Setzt den Channel für Abmeldungen")
 @app_commands.describe(channel="Der Channel wo Abmeldungen gepostet werden")
-@app_commands.checks.has_permissions(administrator=True)
+@app_commands.check(ist_admin_oder_leitung)
 async def set_abmeldung(interaction: discord.Interaction, channel: discord.TextChannel):
     data["channel_abmeldung"] = channel.id
     save_data(data)
@@ -1222,7 +1109,7 @@ async def set_abmeldung(interaction: discord.Interaction, channel: discord.TextC
 
 @tree.command(name="set_abmeldung_liste", description="Setzt den Channel für die Abmeldungs-Übersicht (Live-Liste)")
 @app_commands.describe(channel="Der Channel wo die aktuelle Übersicht aller Abmeldungen als Liste gepostet wird")
-@app_commands.checks.has_permissions(administrator=True)
+@app_commands.check(ist_admin_oder_leitung)
 async def set_abmeldung_liste(interaction: discord.Interaction, channel: discord.TextChannel):
     data["channel_abmeldung_liste"] = channel.id
     data["abmeldung_liste_nachricht_id"] = None
@@ -1234,7 +1121,7 @@ async def set_abmeldung_liste(interaction: discord.Interaction, channel: discord
 
 @tree.command(name="set_abmeldung_button", description="Setzt den Channel für den Abmeldung-Button")
 @app_commands.describe(channel="Der Channel wo der 'Abmeldung' Button gepostet wird")
-@app_commands.checks.has_permissions(administrator=True)
+@app_commands.check(ist_admin_oder_leitung)
 async def set_abmeldung_button(interaction: discord.Interaction, channel: discord.TextChannel):
     data["channel_abmeldung_button"] = channel.id
     data["abmeldung_button_nachricht_id"] = None
@@ -1245,7 +1132,7 @@ async def set_abmeldung_button(interaction: discord.Interaction, channel: discor
     await abmeldung_button_posten_intern(interaction.guild)
 
 @tree.command(name="abmeldung_button_posten", description="Postet oder aktualisiert die Abmeldung-Button-Nachricht")
-@app_commands.checks.has_permissions(administrator=True)
+@app_commands.check(ist_admin_oder_leitung)
 async def abmeldung_button_posten(interaction: discord.Interaction):
     if not data.get("channel_abmeldung_button"):
         await interaction.response.send_message(
@@ -1258,7 +1145,7 @@ async def abmeldung_button_posten(interaction: discord.Interaction):
 
 @tree.command(name="set_verifizierung_channel", description="Setzt den Channel für die Verifizierungs-Nachricht (Button)")
 @app_commands.describe(channel="Der Channel wo neue Mitglieder sich verifizieren")
-@app_commands.checks.has_permissions(administrator=True)
+@app_commands.check(ist_admin_oder_leitung)
 async def set_verifizierung_channel(interaction: discord.Interaction, channel: discord.TextChannel):
     data["channel_verifizierung"] = channel.id
     data["verifizierung_nachricht_id"] = None
@@ -1267,7 +1154,7 @@ async def set_verifizierung_channel(interaction: discord.Interaction, channel: d
     await verifizierung_posten_intern(interaction.guild)
 
 @tree.command(name="verifizierung_posten", description="Postet oder aktualisiert die Verifizierungs-Nachricht")
-@app_commands.checks.has_permissions(administrator=True)
+@app_commands.check(ist_admin_oder_leitung)
 async def verifizierung_posten(interaction: discord.Interaction):
     if not data.get("channel_verifizierung"):
         await interaction.response.send_message(
@@ -1280,7 +1167,7 @@ async def verifizierung_posten(interaction: discord.Interaction):
 
 @tree.command(name="set_verifizierung_log", description="Setzt den Channel für das Verifizierungs-Log")
 @app_commands.describe(channel="Der Channel wo jede neue Verifizierung protokolliert wird")
-@app_commands.checks.has_permissions(administrator=True)
+@app_commands.check(ist_admin_oder_leitung)
 async def set_verifizierung_log(interaction: discord.Interaction, channel: discord.TextChannel):
     data["channel_verifizierung_log"] = channel.id
     save_data(data)
@@ -1288,7 +1175,7 @@ async def set_verifizierung_log(interaction: discord.Interaction, channel: disco
 
 @tree.command(name="probezeit_beenden", description="Beendet die Probezeit eines Mitglieds vorzeitig")
 @app_commands.describe(mitglied="Das Mitglied dessen Probezeit vorzeitig beendet wird")
-@app_commands.checks.has_permissions(administrator=True)
+@app_commands.check(ist_admin_oder_leitung)
 async def probezeit_beenden(interaction: discord.Interaction, mitglied: discord.Member):
     rolle = interaction.guild.get_role(PROBEZEIT_ROLLE_ID)
     entfernt = False
@@ -1320,7 +1207,7 @@ async def probezeit_beenden(interaction: discord.Interaction, mitglied: discord.
 
 @tree.command(name="set_probewoche_channel", description="Setzt den Channel für die automatische Probewoche-Erinnerung nach 7 Tagen")
 @app_commands.describe(channel="Der Channel wo die Erinnerung gepostet wird")
-@app_commands.checks.has_permissions(administrator=True)
+@app_commands.check(ist_admin_oder_leitung)
 async def set_probewoche_channel(interaction: discord.Interaction, channel: discord.TextChannel):
     data["channel_probewoche_erinnerung"] = channel.id
     save_data(data)
@@ -1328,7 +1215,7 @@ async def set_probewoche_channel(interaction: discord.Interaction, channel: disc
 
 @tree.command(name="set_chat", description="Setzt den Channel für den stündlichen OOC-Regelhinweis")
 @app_commands.describe(channel="Der Channel wo stündlich der OOC-Regelhinweis gepostet wird")
-@app_commands.checks.has_permissions(administrator=True)
+@app_commands.check(ist_admin_oder_leitung)
 async def set_chat(interaction: discord.Interaction, channel: discord.TextChannel):
     data["channel_chat_hinweis"] = channel.id
     save_data(data)
@@ -1339,7 +1226,7 @@ async def set_chat(interaction: discord.Interaction, channel: discord.TextChanne
     await ooc_hinweis_senden()
 
 @tree.command(name="channels", description="Zeigt alle aktuell gesetzten Channels und die Rolle")
-@app_commands.checks.has_permissions(administrator=True)
+@app_commands.check(ist_admin_oder_leitung)
 async def channels_info(interaction: discord.Interaction):
     auf    = interaction.guild.get_channel(int(data["channel_aufstellung"]))       if data.get("channel_aufstellung")       else None
     arch   = interaction.guild.get_channel(int(data["channel_archiv"]))            if data.get("channel_archiv")            else None
@@ -1389,7 +1276,7 @@ async def channels_info(interaction: discord.Interaction):
     app_commands.Choice(name="Heute", value="heute"),
     app_commands.Choice(name="Morgen", value="morgen"),
 ])
-@app_commands.checks.has_permissions(administrator=True)
+@app_commands.check(ist_admin_oder_leitung)
 async def abstimmung_manuell(interaction: discord.Interaction, datum: app_commands.Choice[str] = None):
     if not data.get("channel_aufstellung"):
         await interaction.response.send_message(
@@ -1403,7 +1290,7 @@ async def abstimmung_manuell(interaction: discord.Interaction, datum: app_comman
     await interaction.edit_original_response(content="✅ Neue Abstimmung wurde gepostet!")
 
 @tree.command(name="status", description="Zeigt den aktuellen Abstimmungsstand")
-@app_commands.checks.has_permissions(administrator=True)
+@app_commands.check(ist_admin_oder_leitung)
 async def status(interaction: discord.Interaction):
     mitglieder = await get_rolle_mitglieder(interaction.guild)
     datum      = data.get("aktuelles_datum", get_morgen_datum())
@@ -1530,7 +1417,7 @@ async def abmeldung_langzeit(interaction: discord.Interaction, von: str, bis: st
 
 @tree.command(name="abmeldung_loeschen", description="Entfernt die Abmeldung eines Mitglieds")
 @app_commands.describe(mitglied="Das Mitglied dessen Abmeldung entfernt werden soll")
-@app_commands.checks.has_permissions(administrator=True)
+@app_commands.check(ist_admin_oder_leitung)
 async def abmeldung_loeschen(interaction: discord.Interaction, mitglied: discord.Member):
     uid = str(mitglied.id)
     if uid in data["abmeldungen"]:
@@ -1549,7 +1436,7 @@ async def abmeldung_loeschen(interaction: discord.Interaction, mitglied: discord
 # ─── ROUTENWACHE SLASH COMMANDS ───────────────────────────────────────────────
 
 @tree.command(name="stempel_posten", description="Postet oder aktualisiert die Routenwache-Nachricht (Rein/Raus-Buttons)")
-@app_commands.checks.has_permissions(administrator=True)
+@app_commands.check(ist_admin_oder_leitung)
 async def stempel_posten(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
     await stempel_posten_intern(interaction.guild)
@@ -1680,39 +1567,10 @@ async def on_ready():
 
 @bot.event
 async def on_message(message: discord.Message):
-    # Eigene Nachrichten des Bots (z.B. seine eigenen Antworten) ignorieren,
-    # damit er sich nicht selbst triggert.
+    # Eigene Nachrichten des Bots ignorieren, damit er sich nicht selbst triggert.
     if message.author.bot:
         await bot.process_commands(message)
         return
-
-    if message.guild is not None:
-        # Server-Nachricht: reagiert jetzt auf JEDE Beleidigung (nicht mehr
-        # nur, wenn zusätzlich "bot" im Text vorkommt) und schickt eine DM
-        # mit einer von Claude live generierten, kalten/mysteriösen Antwort,
-        # die sich tatsächlich auf das Gesagte bezieht.
-        if ist_beleidigung(message.content):
-            antwort = await hole_ki_antwort(
-                str(message.author.id), message.content, beleidigung=True
-            )
-            try:
-                await message.author.send(antwort)
-            except discord.Forbidden:
-                # DMs für diesen Server/User deaktiviert – nichts zu machen.
-                pass
-    else:
-        # Direktnachricht AN den Bot: vorher wurde das komplett ignoriert
-        # (der obige Block griff nur bei message.guild is not None), der
-        # Bot hat also nie in DMs geantwortet. Jetzt liest er, was
-        # geschrieben wurde (Frage, Kommentar, Beleidigung, ...) und lässt
-        # sich davon eine passende, in Charakter formulierte Antwort geben,
-        # statt eine feste Phrase aus einer Liste zu ziehen.
-        async with message.channel.typing():
-            antwort = await hole_ki_antwort(str(message.author.id), message.content)
-        try:
-            await message.channel.send(antwort)
-        except discord.Forbidden:
-            pass
 
     await bot.process_commands(message)
 
