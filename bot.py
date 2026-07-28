@@ -79,7 +79,7 @@ NECK_SYSTEM_PROMPT = (
 _dm_verlauf: dict[str, list[dict]] = {}
 NECK_VERLAUF_LIMIT = 10  # max. Anzahl gespeicherter Nachrichten (User+Bot) pro Person
 
-async def hole_ki_antwort(user_id: str, text: str, beleidigung: bool = False) -> str:
+async def hole_ki_antwort(user_id: str, text: str, beleidigung: bool = True) -> str:
     """Lässt Claude eine kurze, kalte/mysteriöse Antwort auf 'text' formulieren.
     Nutzt bei DMs den bisherigen Verlauf für Kontext. Fällt bei fehlendem
     API-Key oder Fehlern auf eine feste Notfall-Nachricht zurück."""
