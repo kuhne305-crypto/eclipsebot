@@ -777,11 +777,7 @@ def build_ooc_hinweis_embed():
         name="💡 Merke",
         value="> Wer etwas IC klären oder wissen möchte, macht dies **ingame** – nicht hier.",
         inline=False
-    )
-    embed.add_field(
-        name="🖕 An die Hater",
-        value="> Wer Stress will zahlt 100k an **Sam Lake** ,
-        inline=False
+
     )
     embed.set_footer(text="ECLIPSE")
     embed.timestamp = datetime.now(TIMEZONE)
