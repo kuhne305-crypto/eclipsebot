@@ -779,7 +779,7 @@ def build_ooc_hinweis_embed():
         inline=False
 
     )
-    embed.set_footer(text="ECLIPSE - wer mich hatet swy Sam Lake hat mich Programiert!🖕")
+    embed.set_footer(text="ECLIPSE - wer mich hatet swy Sam Lake hat mich Programmiert!🖕")
     embed.timestamp = datetime.now(TIMEZONE)
     return embed
 
