@@ -57,10 +57,12 @@ DEFAULT_SYSTEM_PROMPT_BEOBACHTUNG = (
     "Sätze, keine langen Absätze, keine Aufzählungen außer es passt wirklich). "
     "Nutze keine Emojis inflationär. Sprich niemals darüber, dass du ein "
     "Sprachmodell oder eine KI bist, außer man fragt dich direkt danach.\n\n"
-    f"Wenn die letzte Zeit im Channel nichts enthält, worauf sich ein "
-    f"natürlicher Beitrag lohnt (z.B. nur Smalltalk ohne Anschlusspunkt, "
-    f"nichts Neues, oder du hast erst vor kurzem schon etwas gesagt), "
-    f"antworte NUR mit dem Wort {SKIP_TOKEN} und sonst nichts."
+    f"Sei dabei nicht zu zurückhaltend: Auch ein kurzer, lockerer Kommentar, "
+    f"eine Anspielung auf etwas Gesagtes, ein Lacher oder eine kleine Meinung "
+    f"zählt als guter Beitrag – du musst nicht auf den 'perfekten' Moment "
+    f"warten. Antworte NUR mit dem Wort {SKIP_TOKEN} und sonst nichts, wenn "
+    f"wirklich absolut nichts im Verlauf steht, worauf man reagieren könnte "
+    f"(z.B. komplett leer oder nur Bot-eigene alte Nachrichten)."
 )
 
 DEFAULT_SYSTEM_PROMPT_DIREKT = (
@@ -108,6 +110,10 @@ letzte_direkt_antwort = {}  # channel_id -> datetime der letzten Sofort-Antwort
 # Beobachtungsmodus-Zustand
 naechste_pruefung = {}          # channel_id -> datetime, ab wann reagiert werden darf
 ungesehene_seit_reaktion = defaultdict(int)  # channel_id -> Anzahl neuer Nachrichten
+skip_zaehler = defaultdict(int)  # channel_id -> Anzahl KEIN_KOMMENTAR in Folge
+# Ab so vielen Skips in Folge (bei weiterhin neuen Nachrichten) wird das
+# Modell härter dazu gedrängt, trotzdem etwas zu sagen.
+MAX_SKIPS_IN_FOLGE = 3
 
 def neues_beobachtungsfenster() -> datetime:
     sekunden = random.uniform(BEOBACHTUNG_MIN_SEKUNDEN, BEOBACHTUNG_MAX_SEKUNDEN)
@@ -130,7 +136,7 @@ def channel_modus(channel_id: int) -> str:
     return data["channel_modi"].get(str(channel_id), "erwaehnung")
 
 # ─── ANTHROPIC API AUFRUF ─────────────────────────────────────────────────────
-async def frage_claude(channel_id: int, system_prompt: str) -> str | None:
+async def frage_claude(channel_id: int, system_prompt: str, zwinge_antwort: bool = False) -> str | None:
     if not ANTHROPIC_API_KEY:
         print("⚠️ ANTHROPIC_API_KEY fehlt, kann keine Antwort generieren.")
         return None
@@ -139,12 +145,18 @@ async def frage_claude(channel_id: int, system_prompt: str) -> str | None:
     if not nachrichten_verlauf:
         return None
 
-    # Wir bilden das Gespräch als eine einzige "user"-Nachricht ab, die den
-    # Verlauf mit Sprechernamen enthält, damit Claude Kontext über mehrere
-    # Personen hinweg hat (Discord kennt sonst keine Multi-User-Rollen).
     verlauf_text = "\n".join(
         f"{eintrag['autor']}: {eintrag['inhalt']}" for eintrag in nachrichten_verlauf
     )
+
+    hinweis = ""
+    if zwinge_antwort:
+        hinweis = (
+            "\n\n(Hinweis: Du hast die letzten Male nichts gesagt, obwohl "
+            f"weiter geschrieben wurde. Antworte diesmal NICHT mit {SKIP_TOKEN} "
+            "sondern finde einen kurzen, lockeren Anschlusskommentar, selbst "
+            "wenn es nur eine knappe Reaktion ist.)"
+        )
 
     payload = {
         "model": ANTHROPIC_MODEL,
@@ -157,7 +169,7 @@ async def frage_claude(channel_id: int, system_prompt: str) -> str | None:
                     "Hier ist der bisherige Chatverlauf im Discord-Channel "
                     "(Format: Name: Nachricht). Reagiere als nächster Beitrag "
                     "im Gespräch, so wie es gerade angebracht ist:\n\n"
-                    f"{verlauf_text}"
+                    f"{verlauf_text}{hinweis}"
                 ),
             }
         ],
@@ -364,39 +376,76 @@ async def on_message(message: discord.Message):
 async def beobachtungs_check():
     jetzt = datetime.now(timezone.utc)
     for channel_id, faellig_um in list(naechste_pruefung.items()):
-        if channel_modus(channel_id) != "beobachtend":
-            naechste_pruefung.pop(channel_id, None)
-            ungesehene_seit_reaktion.pop(channel_id, None)
-            continue
-        if jetzt < faellig_um:
-            continue
-        if ungesehene_seit_reaktion.get(channel_id, 0) == 0:
-            # Nichts Neues seit der letzten Reaktion -> Fenster einfach neu
-            # würfeln und warten, statt grundlos zu reagieren.
-            naechste_pruefung[channel_id] = neues_beobachtungsfenster()
-            continue
+        try:
+            await _beobachtungs_check_channel(channel_id, faellig_um, jetzt)
+        except Exception as e:
+            # Ein Fehler bei einem Channel darf die gesamte Loop nicht
+            # stoppen (tasks.loop würde sich sonst sang- und klanglos
+            # beenden und nie wieder prüfen).
+            print(f"[beobachtung] ❌ Unerwarteter Fehler bei Channel {channel_id}: {e}")
 
-        kanal = bot.get_channel(channel_id)
-        if kanal is None:
-            naechste_pruefung.pop(channel_id, None)
-            ungesehene_seit_reaktion.pop(channel_id, None)
-            continue
+async def _beobachtungs_check_channel(channel_id, faellig_um, jetzt):
+    if channel_modus(channel_id) != "beobachtend":
+        naechste_pruefung.pop(channel_id, None)
+        ungesehene_seit_reaktion.pop(channel_id, None)
+        skip_zaehler.pop(channel_id, None)
+        return
+    if jetzt < faellig_um:
+        return
+    anzahl_neu = ungesehene_seit_reaktion.get(channel_id, 0)
+    if anzahl_neu == 0:
+        print(f"[beobachtung] Channel {channel_id}: fällig, aber keine neuen Nachrichten -> Fenster neu würfeln.")
+        naechste_pruefung[channel_id] = neues_beobachtungsfenster()
+        return
 
-        lock = channel_locks[channel_id]
-        if lock.locked():
-            continue  # gerade läuft schon eine Sofort-Reaktion, nächste Runde erneut versuchen
+    kanal = bot.get_channel(channel_id)
+    if kanal is None:
+        print(f"[beobachtung] Channel {channel_id} nicht im Cache gefunden -> entferne aus Beobachtung.")
+        naechste_pruefung.pop(channel_id, None)
+        ungesehene_seit_reaktion.pop(channel_id, None)
+        skip_zaehler.pop(channel_id, None)
+        return
 
-        async with lock:
-            async with kanal.typing():
-                antwort = await frage_claude(
-                    channel_id, data.get("system_prompt_beobachtung", DEFAULT_SYSTEM_PROMPT_BEOBACHTUNG)
-                )
+    lock = channel_locks[channel_id]
+    if lock.locked():
+        print(f"[beobachtung] Channel {channel_id}: Lock belegt (Sofort-Reaktion läuft) -> nächste Runde erneut.")
+        return
 
-            if antwort and antwort.strip().upper() != SKIP_TOKEN:
-                await sende_antwort(kanal, antwort, channel_id)
+    zwinge_antwort = skip_zaehler[channel_id] >= MAX_SKIPS_IN_FOLGE
+    print(f"[beobachtung] Channel {channel_id}: fällig mit {anzahl_neu} neuen Nachrichten, generiere Reaktion (zwinge_antwort={zwinge_antwort})...")
 
-            ungesehene_seit_reaktion[channel_id] = 0
-            naechste_pruefung[channel_id] = neues_beobachtungsfenster()
+    async with lock:
+        async with kanal.typing():
+            antwort = await frage_claude(
+                channel_id,
+                data.get("system_prompt_beobachtung", DEFAULT_SYSTEM_PROMPT_BEOBACHTUNG),
+                zwinge_antwort=zwinge_antwort,
+            )
+
+        if antwort is None:
+            print(f"[beobachtung] Channel {channel_id}: keine Antwort von der API erhalten (siehe Fehler oben).")
+        elif antwort.strip().upper() == SKIP_TOKEN:
+            skip_zaehler[channel_id] += 1
+            print(f"[beobachtung] Channel {channel_id}: Modell hat {SKIP_TOKEN} gewählt (in Folge: {skip_zaehler[channel_id]}).")
+        else:
+            skip_zaehler[channel_id] = 0
+            print(f"[beobachtung] Channel {channel_id}: Antwort gesendet.")
+            await sende_antwort(kanal, antwort, channel_id)
+
+        ungesehene_seit_reaktion[channel_id] = 0
+        naechste_pruefung[channel_id] = neues_beobachtungsfenster()
+
+@beobachtungs_check.error
+async def beobachtungs_check_fehler(error):
+    # Letzte Sicherheitsnetz-Ebene: selbst wenn oben etwas durchrutscht,
+    # soll die Loop nicht sterben, sondern nur geloggt werden. discord.py
+    # startet die Loop nach einem Error-Handler NICHT automatisch neu, daher
+    # hier explizit neu starten.
+    print(f"[beobachtung] ❌ Loop-Fehler (wird neu gestartet): {error}")
+    if beobachtungs_check.is_running():
+        beobachtungs_check.restart()
+    else:
+        beobachtungs_check.start()
 
 @beobachtungs_check.before_loop
 async def vor_beobachtungs_check():
@@ -422,9 +471,11 @@ async def ki_channel(interaction: discord.Interaction, modus: app_commands.Choic
     if modus.value == "beobachtend":
         naechste_pruefung[ziel.id] = neues_beobachtungsfenster()
         ungesehene_seit_reaktion[ziel.id] = 0
+        skip_zaehler[ziel.id] = 0
     else:
         naechste_pruefung.pop(ziel.id, None)
         ungesehene_seit_reaktion.pop(ziel.id, None)
+        skip_zaehler.pop(ziel.id, None)
 
     await interaction.response.send_message(
         f"✅ KI-Modus für {ziel.mention}: **{modus.name}**", ephemeral=True
@@ -451,6 +502,8 @@ async def ki_status(interaction: discord.Interaction):
                 extra = f" (nächste mögliche Reaktion in ~{int(rest // 60)} Min)"
             else:
                 extra = " (fällig)"
+            if skip_zaehler.get(cid, 0) > 0:
+                extra += f" [zuletzt {skip_zaehler[cid]}x übersprungen]"
         zeilen.append(f"{name}: **{modus}**{extra}")
 
     ooc_id = data.get("channel_chat_hinweis")
@@ -466,6 +519,7 @@ async def ki_reset(interaction: discord.Interaction):
     cid = interaction.channel.id
     verlauf[cid].clear()
     ungesehene_seit_reaktion[cid] = 0
+    skip_zaehler[cid] = 0
     if channel_modus(cid) == "beobachtend":
         naechste_pruefung[cid] = neues_beobachtungsfenster()
     await interaction.response.send_message("✅ Gedächtnis für diesen Channel geleert.", ephemeral=True)
