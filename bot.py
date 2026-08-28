@@ -45,6 +45,28 @@ OOC_HINWEIS_STUNDEN = (0, 4, 8, 12, 16, 20)
 # wichtig für den Beobachtungsmodus, damit nicht jedes Fenster kommentiert wird.
 SKIP_TOKEN = "KEIN_KOMMENTAR"
 
+# ─── STILPROFIL-LERNEN ────────────────────────────────────────────────────────
+# Wie viele echte Nutzer-Nachrichten (unabhängig vom Kanal-Modus) pro Channel
+# gesammelt werden, aus denen das Stilprofil abgeleitet wird.
+STIL_SAMMLUNG_LIMIT = 300
+# Nach so vielen NEUEN Nutzer-Nachrichten seit dem letzten Update wird das
+# Stilprofil automatisch neu erstellt.
+STIL_UPDATE_SCHWELLE = 120
+# Ab wie vielen gesammelten Nachrichten überhaupt ein erstes Profil erstellt wird.
+STIL_MINDEST_NACHRICHTEN = 30
+
+STIL_SYSTEM_PROMPT = (
+    "Du analysierst einen Discord-Chatverlauf und beschreibst NUR den "
+    "Schreibstil der Personen darin – keine Inhalte, keine Bewertung, keine "
+    "Meinung zu den Personen. Achte auf: typische Wortwahl, Slang/Jargon, "
+    "Abkürzungen, Anglizismen, Emoji-Nutzung (welche, wie oft), "
+    "Groß-/Kleinschreibung, Satzlänge, Interpunktion, wiederkehrende "
+    "Sprüche/Insider-Witze/Running Gags, Anredeformen. Fasse das in "
+    "maximal 120 Wörtern als Stichpunkte oder kurzen Fließtext zusammen, "
+    "auf Deutsch. Antworte NUR mit der Stilbeschreibung, ohne Einleitung "
+    "wie 'Hier ist...'."
+)
+
 DEFAULT_SYSTEM_PROMPT_BEOBACHTUNG = (
     "Du bist ein Discord-Bot, der eine Weile im Channel mitliest und danach "
     "gelegentlich einen eigenen Beitrag zum Gespräch macht – wie ein Mitglied "
@@ -89,6 +111,8 @@ def load_data():
         "system_prompt_direkt": DEFAULT_SYSTEM_PROMPT_DIREKT,
         "channel_chat_hinweis": None,
         "ooc_hinweis_nachricht_id": None,
+        # {channel_id_str: "Beschreibung des Schreibstils..."}
+        "stilprofile": {},
     }
     for key, wert in standard.items():
         geladen.setdefault(key, wert)
@@ -115,6 +139,13 @@ skip_zaehler = defaultdict(int)  # channel_id -> Anzahl KEIN_KOMMENTAR in Folge
 # Modell härter dazu gedrängt, trotzdem etwas zu sagen.
 MAX_SKIPS_IN_FOLGE = 3
 
+# Rein für das Stilprofil-Lernen: Sammlung echter Nutzer-Nachrichten pro
+# Channel (unabhängig vom Kanal-Modus, unabhängig vom Kurzzeitgedächtnis oben,
+# das nur begrenzt Kontext für einzelne Antworten hält).
+stil_sammlung = defaultdict(lambda: deque(maxlen=STIL_SAMMLUNG_LIMIT))
+neue_seit_stil_update = defaultdict(int)
+stil_update_laeuft = defaultdict(bool)
+
 def neues_beobachtungsfenster() -> datetime:
     sekunden = random.uniform(BEOBACHTUNG_MIN_SEKUNDEN, BEOBACHTUNG_MAX_SEKUNDEN)
     return datetime.now(timezone.utc) + timedelta(seconds=sekunden)
@@ -135,46 +166,31 @@ def ist_admin_oder_leitung(interaction: discord.Interaction) -> bool:
 def channel_modus(channel_id: int) -> str:
     return data["channel_modi"].get(str(channel_id), "erwaehnung")
 
-# ─── ANTHROPIC API AUFRUF ─────────────────────────────────────────────────────
-async def frage_claude(channel_id: int, system_prompt: str, zwinge_antwort: bool = False) -> str | None:
+def system_prompt_mit_stil(basis_prompt: str, channel_id: int) -> str:
+    """Hängt das gelernte Stilprofil des Channels (falls vorhanden) an einen
+    System-Prompt an, damit der Bot wie die echten Mitglieder klingt."""
+    profil = data["stilprofile"].get(str(channel_id))
+    if not profil:
+        return basis_prompt
+    return (
+        f"{basis_prompt}\n\n"
+        "So schreiben die Leute in diesem Channel normalerweise (orientiere "
+        "dich daran, aber übertreibe es nicht):\n"
+        f"{profil}"
+    )
+
+# ─── ANTHROPIC API AUFRUF (allgemein, für Chat-Antworten UND Stilanalyse) ────
+async def rufe_claude_auf(system_prompt: str, user_content: str, max_tokens: int = 300) -> str | None:
     if not ANTHROPIC_API_KEY:
         print("⚠️ ANTHROPIC_API_KEY fehlt, kann keine Antwort generieren.")
         return None
 
-    nachrichten_verlauf = list(verlauf[channel_id])
-    if not nachrichten_verlauf:
-        return None
-
-    verlauf_text = "\n".join(
-        f"{eintrag['autor']}: {eintrag['inhalt']}" for eintrag in nachrichten_verlauf
-    )
-
-    hinweis = ""
-    if zwinge_antwort:
-        hinweis = (
-            "\n\n(Hinweis: Du hast die letzten Male nichts gesagt, obwohl "
-            f"weiter geschrieben wurde. Antworte diesmal NICHT mit {SKIP_TOKEN} "
-            "sondern finde einen kurzen, lockeren Anschlusskommentar, selbst "
-            "wenn es nur eine knappe Reaktion ist.)"
-        )
-
     payload = {
         "model": ANTHROPIC_MODEL,
-        "max_tokens": 300,
+        "max_tokens": max_tokens,
         "system": system_prompt,
-        "messages": [
-            {
-                "role": "user",
-                "content": (
-                    "Hier ist der bisherige Chatverlauf im Discord-Channel "
-                    "(Format: Name: Nachricht). Reagiere als nächster Beitrag "
-                    "im Gespräch, so wie es gerade angebracht ist:\n\n"
-                    f"{verlauf_text}{hinweis}"
-                ),
-            }
-        ],
+        "messages": [{"role": "user", "content": user_content}],
     }
-
     headers = {
         "x-api-key": ANTHROPIC_API_KEY,
         "anthropic-version": "2023-06-01",
@@ -203,6 +219,74 @@ async def frage_claude(channel_id: int, system_prompt: str, zwinge_antwort: bool
     except Exception as e:
         print(f"❌ Fehler beim Aufruf der Anthropic API: {e}")
         return None
+
+async def frage_claude(channel_id: int, system_prompt: str, zwinge_antwort: bool = False) -> str | None:
+    nachrichten_verlauf = list(verlauf[channel_id])
+    if not nachrichten_verlauf:
+        return None
+
+    verlauf_text = "\n".join(
+        f"{eintrag['autor']}: {eintrag['inhalt']}" for eintrag in nachrichten_verlauf
+    )
+
+    hinweis = ""
+    if zwinge_antwort:
+        hinweis = (
+            "\n\n(Hinweis: Du hast die letzten Male nichts gesagt, obwohl "
+            f"weiter geschrieben wurde. Antworte diesmal NICHT mit {SKIP_TOKEN} "
+            "sondern finde einen kurzen, lockeren Anschlusskommentar, selbst "
+            "wenn es nur eine knappe Reaktion ist.)"
+        )
+
+    user_content = (
+        "Hier ist der bisherige Chatverlauf im Discord-Channel "
+        "(Format: Name: Nachricht). Reagiere als nächster Beitrag "
+        "im Gespräch, so wie es gerade angebracht ist:\n\n"
+        f"{verlauf_text}{hinweis}"
+    )
+
+    effektiver_prompt = system_prompt_mit_stil(system_prompt, channel_id)
+    return await rufe_claude_auf(effektiver_prompt, user_content, max_tokens=300)
+
+# ─── STILPROFIL: AUFBAU UND AUTOMATISCHES UPDATE ─────────────────────────────
+async def erstelle_stilprofil(channel_id: int) -> bool:
+    """Baut aus den gesammelten Nutzer-Nachrichten ein neues Stilprofil und
+    speichert es. Gibt True zurück, wenn erfolgreich."""
+    if stil_update_laeuft[channel_id]:
+        return False
+    nachrichten = list(stil_sammlung[channel_id])
+    if len(nachrichten) < STIL_MINDEST_NACHRICHTEN:
+        return False
+
+    stil_update_laeuft[channel_id] = True
+    try:
+        verlauf_text = "\n".join(
+            f"{eintrag['autor']}: {eintrag['inhalt']}" for eintrag in nachrichten
+        )
+        profil = await rufe_claude_auf(
+            STIL_SYSTEM_PROMPT,
+            f"Chatverlauf:\n\n{verlauf_text}",
+            max_tokens=400,
+        )
+        if not profil:
+            print(f"[stilprofil] Channel {channel_id}: Erstellung fehlgeschlagen (keine Antwort).")
+            return False
+
+        data["stilprofile"][str(channel_id)] = profil
+        save_data(data)
+        neue_seit_stil_update[channel_id] = 0
+        print(f"[stilprofil] Channel {channel_id}: Stilprofil aktualisiert ({len(nachrichten)} Nachrichten als Basis).")
+        return True
+    finally:
+        stil_update_laeuft[channel_id] = False
+
+def stil_sammlung_erfassen(channel_id: int, autor: str, inhalt: str):
+    """Nimmt eine echte Nutzer-Nachricht in die Stil-Sammlung auf und stößt
+    bei Bedarf im Hintergrund ein Update des Stilprofils an."""
+    stil_sammlung[channel_id].append({"autor": autor, "inhalt": inhalt})
+    neue_seit_stil_update[channel_id] += 1
+    if neue_seit_stil_update[channel_id] >= STIL_UPDATE_SCHWELLE:
+        asyncio.create_task(erstelle_stilprofil(channel_id))
 
 # ─── OOC-CHAT REGELHINWEIS (mehrmals täglich) ────────────────────────────────
 def build_ooc_hinweis_embed() -> discord.Embed:
@@ -324,17 +408,26 @@ async def on_message(message: discord.Message):
 
     # Jede menschliche Nachricht wandert ins Kurzzeitgedächtnis, unabhängig
     # vom Modus, damit bei Bedarf (Erwähnung oder spätere Beobachtung) Kontext
-    # vorhanden ist.
+    # vorhanden ist. Zusätzlich fließt sie in die Stil-Sammlung ein, damit der
+    # Bot langfristig lernt, wie die Leute hier schreiben.
     if message.content:
         verlauf[channel_id].append({
             "autor": message.author.display_name,
             "inhalt": message.content,
         })
+        stil_sammlung_erfassen(channel_id, message.author.display_name, message.content)
+
         if modus == "beobachtend":
             ungesehene_seit_reaktion[channel_id] += 1
             # Erste Nachricht seit der letzten Reaktion startet das Zeitfenster.
             if channel_id not in naechste_pruefung:
                 naechste_pruefung[channel_id] = neues_beobachtungsfenster()
+    elif not message.content and (message.attachments or message.embeds):
+        # Nachricht ohne Text (z.B. nur Bild) – kein Beitrag zu Verlauf/Stil,
+        # aber falls dies passiert obwohl der Nutzer sichtbar Text getippt hat,
+        # deutet das auf ein fehlendes "Message Content Intent" im Discord
+        # Developer Portal hin (siehe Hinweis in /ki_status).
+        pass
 
     await bot.process_commands(message)
 
@@ -486,11 +579,13 @@ async def ki_channel(interaction: discord.Interaction, modus: app_commands.Choic
 async def ki_status(interaction: discord.Interaction):
     if not data["channel_modi"]:
         await interaction.response.send_message(
-            "Kein Channel konfiguriert – Standard ist überall **erwaehnung**.", ephemeral=True
+            "Kein Channel konfiguriert – Standard ist überall **erwaehnung**.\n"
+            f"API-Key gesetzt: {'✅' if ANTHROPIC_API_KEY else '❌ FEHLT'}",
+            ephemeral=True
         )
         return
     jetzt = datetime.now(timezone.utc)
-    zeilen = []
+    zeilen = [f"API-Key gesetzt: {'✅' if ANTHROPIC_API_KEY else '❌ FEHLT'}\n"]
     for cid_str, modus in data["channel_modi"].items():
         cid = int(cid_str)
         kanal = interaction.guild.get_channel(cid)
@@ -504,7 +599,8 @@ async def ki_status(interaction: discord.Interaction):
                 extra = " (fällig)"
             if skip_zaehler.get(cid, 0) > 0:
                 extra += f" [zuletzt {skip_zaehler[cid]}x übersprungen]"
-        zeilen.append(f"{name}: **{modus}**{extra}")
+        stil_status = "mit Stilprofil" if str(cid) in data["stilprofile"] else f"noch kein Stilprofil ({len(stil_sammlung.get(cid, []))}/{STIL_MINDEST_NACHRICHTEN} Nachrichten gesammelt)"
+        zeilen.append(f"{name}: **{modus}**{extra} – {stil_status}")
 
     ooc_id = data.get("channel_chat_hinweis")
     if ooc_id:
@@ -539,6 +635,35 @@ async def ki_persona_direkt(interaction: discord.Interaction, text: str = None):
     data["system_prompt_direkt"] = text if text else DEFAULT_SYSTEM_PROMPT_DIREKT
     save_data(data)
     await interaction.response.send_message("✅ System-Prompt (Direkt) aktualisiert.", ephemeral=True)
+
+@tree.command(name="ki_stil_lernen", description="Erstellt/aktualisiert das Stilprofil dieses Channels sofort neu")
+@app_commands.check(ist_admin_oder_leitung)
+async def ki_stil_lernen(interaction: discord.Interaction):
+    cid = interaction.channel.id
+    anzahl = len(stil_sammlung.get(cid, []))
+    if anzahl < STIL_MINDEST_NACHRICHTEN:
+        await interaction.response.send_message(
+            f"❌ Noch zu wenige Nachrichten gesammelt ({anzahl}/{STIL_MINDEST_NACHRICHTEN}). "
+            "Erst wenn genug echte Chat-Nachrichten in diesem Channel geschrieben wurden, "
+            "kann ein Stilprofil erstellt werden.",
+            ephemeral=True
+        )
+        return
+    await interaction.response.send_message("⏳ Erstelle Stilprofil...", ephemeral=True)
+    erfolg = await erstelle_stilprofil(cid)
+    if erfolg:
+        await interaction.edit_original_response(content="✅ Stilprofil aktualisiert. Nutze `/ki_stil_anzeigen` um es zu sehen.")
+    else:
+        await interaction.edit_original_response(content="❌ Erstellung fehlgeschlagen (siehe Logs, z.B. API-Key-Problem).")
+
+@tree.command(name="ki_stil_anzeigen", description="Zeigt das aktuell gelernte Stilprofil dieses Channels")
+@app_commands.check(ist_admin_oder_leitung)
+async def ki_stil_anzeigen(interaction: discord.Interaction):
+    profil = data["stilprofile"].get(str(interaction.channel.id))
+    if not profil:
+        await interaction.response.send_message("Für diesen Channel wurde noch kein Stilprofil erstellt.", ephemeral=True)
+        return
+    await interaction.response.send_message(f"**Aktuelles Stilprofil:**\n{profil}", ephemeral=True)
 
 @tree.command(name="set_chat", description="Setzt den Channel für den mehrmals täglichen OOC-Regelhinweis")
 @app_commands.describe(channel="Der Channel wo der OOC-Regelhinweis gepostet wird")
@@ -581,6 +706,9 @@ async def on_ready():
             print(f"✅ {len(synced_global)} Commands global gesynct: {[c.name for c in synced_global]}")
     except Exception as e:
         print(f"❌ FEHLER beim Sync: {e}")
+
+    if not ANTHROPIC_API_KEY:
+        print("⚠️⚠️⚠️ ACHTUNG: ANTHROPIC_API_KEY ist NICHT gesetzt – der Bot wird niemals eigenständig antworten können!")
 
     # Für bereits als "beobachtend" konfigurierte Channels beim (Neu-)Start
     # ein erstes Zeitfenster setzen, falls noch keins existiert.
