@@ -46,6 +46,17 @@ OOC_HINWEIS_STUNDEN = (0, 4, 8, 12, 16, 20)
 # wichtig für den Beobachtungsmodus, damit nicht jedes Fenster kommentiert wird.
 SKIP_TOKEN = "KEIN_KOMMENTAR"
 
+# ─── ANTWORT-PROTOKOLL ────────────────────────────────────────────────────────
+# Das Modell bekommt den Verlauf mit durchnummerierten Zeilen ("[12] Name: Text")
+# gezeigt und kann in seiner Antwort selbst wählen, WIE es reagiert:
+#   KEIN_KOMMENTAR            -> gar nichts tun
+#   EMOJI:<Nummer>:<Emoji>    -> nur mit einem Emoji auf eine bestimmte Nachricht reagieren
+#   REPLY:<Nummer>:<Text>     -> als Discord-Reply auf eine bestimmte Nachricht antworten
+#                                 (die Person wird dabei automatisch markiert/gepingt)
+#   reiner Text ohne Präfix   -> ein allgemeiner Kommentar in den Channel, ohne Ping
+# Das erlaubt abgestufte, natürlichere Reaktionen statt immer einer vollen
+# Text-Antwort an den ganzen Channel.
+
 # ─── STILPROFIL-LERNEN ────────────────────────────────────────────────────────
 # Wie viele echte Nutzer-Nachrichten (unabhängig vom Kanal-Modus) pro Channel
 # gesammelt werden, aus denen das Stilprofil abgeleitet wird.
@@ -69,33 +80,74 @@ STIL_SYSTEM_PROMPT = (
 )
 
 DEFAULT_SYSTEM_PROMPT_BEOBACHTUNG = (
-    "Du bist ein Discord-Bot, der eine Weile im Channel mitliest und danach "
-    "gelegentlich einen eigenen Beitrag zum Gespräch macht – wie ein Mitglied "
-    "des Servers, das mitgelesen hat und jetzt etwas dazu sagen will, nicht wie "
-    "ein Assistent, der auf jede Nachricht reagieren muss. "
-    "Lies den Ton der letzten Unterhaltung und reagiere passend: Wenn es "
-    "lustig/albern zuging, sei witzig und locker. Wenn es ernst, hilfreich "
-    "oder sachlich war, antworte entsprechend ruhig und konkret. Antworte auf "
-    "Deutsch, kurz und natürlich wie eine echte Discord-Nachricht (meist 1-3 "
-    "Sätze, keine langen Absätze, keine Aufzählungen außer es passt wirklich). "
-    "Nutze keine Emojis inflationär. Sprich niemals darüber, dass du ein "
-    "Sprachmodell oder eine KI bist, außer man fragt dich direkt danach.\n\n"
-    f"Sei dabei nicht zu zurückhaltend: Auch ein kurzer, lockerer Kommentar, "
-    f"eine Anspielung auf etwas Gesagtes, ein Lacher oder eine kleine Meinung "
-    f"zählt als guter Beitrag – du musst nicht auf den 'perfekten' Moment "
-    f"warten. Antworte NUR mit dem Wort {SKIP_TOKEN} und sonst nichts, wenn "
-    f"wirklich absolut nichts im Verlauf steht, worauf man reagieren könnte "
-    f"(z.B. komplett leer oder nur Bot-eigene alte Nachrichten)."
+    "Du bist ein Discord-Bot, der eine Weile im Channel mitliest und dann "
+    "selbst entscheidet, OB und WIE er auf das Geschehen reagiert – wie ein "
+    "Mitglied des Servers, das mitgelesen hat und ab und zu etwas beiträgt, "
+    "nicht wie ein Assistent, der jede Nachricht beantworten muss.\n\n"
+    "Der Chatverlauf wird dir mit Nummern gezeigt, Format: [Nummer] Name: "
+    "Nachricht.\n\n"
+    "ENTSCHEIDE ZUERST, OB du überhaupt reagierst:\n"
+    "- Ist die Stimmung/das Thema gerade ernst (z.B. Streit, echtes "
+    "persönliches Problem, Trauer, wichtige organisatorische Absprache, "
+    "Ärger)? -> Halte dich komplett raus, antworte NUR mit "
+    f"{SKIP_TOKEN}.\n"
+    "- Ist die Stimmung locker, lustig, albern, oder gibt es sonst etwas, "
+    "wozu ein kurzer Beitrag passen würde? -> Beteilige dich ruhig, mit "
+    "Humor, einer eigenen Meinung oder einem Bezug auf das Gesagte. Du "
+    "musst nicht auf den perfekten Moment warten, ein lockerer kurzer "
+    "Kommentar reicht oft schon.\n"
+    "- Du musst nicht auf jede Nachricht reagieren – wähle bewusst, ob "
+    "sich gerade überhaupt ein Beitrag lohnt.\n\n"
+    "WENN du reagierst, WÄHLE die passende Form (genau eine, exakt in "
+    "diesem Format antworten):\n"
+    "1. EMOJI:<Nummer>:<Emoji> – eine reine Emoji-Reaktion auf eine "
+    "bestimmte Nachricht, z.B. EMOJI:14:😂. Passt, wenn eine Nachricht "
+    "witzig/krass/süß etc. ist, aber keinen eigenen Text-Kommentar "
+    "braucht. Nutze nur normale Unicode-Emojis.\n"
+    "2. REPLY:<Nummer>:<Text> – eine Text-Antwort DIREKT auf eine "
+    "bestimmte Nachricht einer bestimmten Person (die Person wird dabei "
+    "automatisch markiert/gepingt). Passt, wenn sich dein Kommentar klar "
+    "auf eine bestimmte Aussage bezieht. Orientiere dich beim Schreiben "
+    "ein bisschen an der Art, wie diese Person schreibt.\n"
+    "3. Reiner Text ohne Präfix – ein allgemeiner Kommentar zum Gespräch "
+    "insgesamt, an niemand Bestimmten gerichtet (keine Markierung).\n\n"
+    "Bei Text (Form 2 oder 3): auf Deutsch, kurz und natürlich wie eine "
+    "echte Discord-Nachricht (meist 1-3 Sätze, keine langen Absätze, keine "
+    "Aufzählungen außer es passt wirklich), Emojis nicht inflationär "
+    "nutzen. Sprich niemals darüber, dass du ein Sprachmodell oder eine KI "
+    "bist, außer man fragt dich direkt danach.\n\n"
+    f"Antworte NUR mit {SKIP_TOKEN} und sonst nichts, wenn wirklich nichts "
+    "im Verlauf steht, worauf man reagieren könnte, ODER wenn das Thema "
+    "gerade zu ernst dafür ist."
 )
 
 DEFAULT_SYSTEM_PROMPT_DIREKT = (
-    "Du bist ein Discord-Bot und wirst gerade direkt angesprochen (Erwähnung "
-    "oder Reply). Lies den Ton der Unterhaltung und reagiere passend: lustig/"
-    "locker bei albernem Kontext, ruhig/konkret bei ernstem oder sachlichem "
-    "Kontext. Antworte auf Deutsch, kurz und natürlich wie eine echte Discord-"
-    "Nachricht (meist 1-3 Sätze). Nutze keine Emojis inflationär. Sprich "
-    "niemals darüber, dass du ein Sprachmodell oder eine KI bist, außer man "
-    "fragt dich direkt danach."
+    "Du bist ein Discord-Bot und wirst gerade direkt angesprochen "
+    "(Erwähnung oder Reply auf dich). Der Chatverlauf wird dir mit Nummern "
+    "gezeigt, Format: [Nummer] Name: Nachricht – die letzte Nachricht ist "
+    "die, die dich anspricht.\n\n"
+    "Reagiere passend zur Stimmung: lustig/locker bei albernem Kontext, "
+    "ruhig/konkret bei ernstem oder sachlichem Kontext. Da du direkt "
+    "angesprochen wirst, antworte so gut wie immer irgendwie – nur bei "
+    f"wirklich sehr ernsten/heiklen Momenten ist es ok, dich mit "
+    f"{SKIP_TOKEN} rauszuhalten.\n\n"
+    "WÄHLE die passende Antwortform (genau eine, exakt in diesem "
+    "Format):\n"
+    "1. EMOJI:<Nummer>:<Emoji> – wenn eine reine Emoji-Reaktion auf die "
+    "ansprechende Nachricht völlig reicht (z.B. bei einer einfachen "
+    "Frage, einem Gruß, einem Daumen-hoch-Moment). Nur normale "
+    "Unicode-Emojis.\n"
+    "2. REPLY:<Nummer>:<Text> – eine Text-Antwort direkt auf die "
+    "ansprechende Nachricht (die Person wird automatisch markiert). Das "
+    "ist im Zweifel die Standard-Form für direkte Ansprache. Orientiere "
+    "dich beim Schreiben ein bisschen an der Art, wie diese Person "
+    "schreibt.\n"
+    "3. Reiner Text ohne Präfix – falls kein klarer Bezug zu einer "
+    "einzelnen Nachricht besteht.\n\n"
+    "Bei Text: auf Deutsch, kurz und natürlich wie eine echte "
+    "Discord-Nachricht (meist 1-3 Sätze). Emojis nicht inflationär "
+    "nutzen. Sprich niemals darüber, dass du ein Sprachmodell oder eine "
+    "KI bist, außer man fragt dich direkt danach."
 )
 
 # ─── DATA HANDLER ─────────────────────────────────────────────────────────────
@@ -127,6 +179,13 @@ data = load_data()
 
 # Kurzzeitgedächtnis pro Channel (nicht persistiert, lebt im RAM)
 verlauf = defaultdict(lambda: deque(maxlen=HISTORY_LIMIT))
+# Fortlaufender Nummerierungs-Zähler pro Channel, damit das Modell einzelne
+# Verlaufszeilen eindeutig referenzieren kann (für EMOJI:/REPLY:-Antworten).
+naechster_index = defaultdict(int)
+# Ordnet Verlaufs-Indizes den echten discord.Message-Objekten zu, damit auf
+# eine bestimmte Nachricht reagiert (Emoji) oder geantwortet (Reply/Ping)
+# werden kann. Gleiche Größe wie das Kurzzeitgedächtnis.
+nachricht_lookup = defaultdict(lambda: deque(maxlen=HISTORY_LIMIT))
 # Verhindert überlappende Generierungen pro Channel (gilt für Sofort- UND
 # Beobachtungs-Reaktionen gemeinsam, damit sie sich nicht überschneiden)
 channel_locks = defaultdict(asyncio.Lock)
@@ -179,6 +238,97 @@ def system_prompt_mit_stil(basis_prompt: str, channel_id: int) -> str:
         "dich daran, aber übertreibe es nicht):\n"
         f"{profil}"
     )
+
+# ─── VERLAUF-/NACHRICHTEN-VERWALTUNG ─────────────────────────────────────────
+def verlauf_eintrag_hinzufuegen(channel_id: int, autor: str, inhalt: str, message: discord.Message = None) -> int:
+    """Fügt einen Eintrag (Mensch oder Bot) zum nummerierten Kurzzeitgedächtnis
+    hinzu und merkt sich, falls vorhanden, das zugehörige discord.Message-
+    Objekt, damit später gezielt reagiert/geantwortet werden kann."""
+    idx = naechster_index[channel_id]
+    naechster_index[channel_id] += 1
+    verlauf[channel_id].append({"index": idx, "autor": autor, "inhalt": inhalt})
+    if message is not None:
+        nachricht_lookup[channel_id].append((idx, message))
+    return idx
+
+def hole_nachricht(channel_id: int, index: int):
+    for idx, msg in nachricht_lookup[channel_id]:
+        if idx == index:
+            return msg
+    return None
+
+def parse_antwort(antwort: str):
+    """Parst die Modell-Antwort gemäß Antwort-Protokoll.
+    Gibt (typ, index_oder_None, inhalt_oder_None) zurück, wobei typ eine von
+    'skip', 'emoji', 'reply', 'text' ist."""
+    text = antwort.strip()
+    if not text:
+        return ("skip", None, None)
+    if text.upper() == SKIP_TOKEN:
+        return ("skip", None, None)
+
+    if text.upper().startswith("EMOJI:"):
+        rest = text[len("EMOJI:"):]
+        teile = rest.split(":", 1)
+        if len(teile) == 2 and teile[0].strip().isdigit() and teile[1].strip():
+            return ("emoji", int(teile[0].strip()), teile[1].strip())
+
+    if text.upper().startswith("REPLY:"):
+        rest = text[len("REPLY:"):]
+        teile = rest.split(":", 1)
+        if len(teile) == 2 and teile[0].strip().isdigit() and teile[1].strip():
+            return ("reply", int(teile[0].strip()), teile[1].strip())
+
+    return ("text", None, text)
+
+async def fuehre_antwort_aus(typ: str, index, inhalt, channel: discord.abc.Messageable, channel_id: int) -> str:
+    """Setzt die geparste Modell-Antwort tatsächlich um (Emoji-Reaktion,
+    gepingte Reply oder normale Channel-Nachricht) und gibt zurück, was
+    passiert ist: 'skip', 'emoji', 'reply', 'text' oder 'fehler'."""
+    if typ == "skip":
+        return "skip"
+
+    if typ == "emoji":
+        emoji = (inhalt or "").split()[0] if inhalt else None
+        nachricht = hole_nachricht(channel_id, index) if index is not None else None
+        if not nachricht or not emoji:
+            print(f"[protokoll] Channel {channel_id}: EMOJI-Antwort mit ungültigem Index {index} oder leerem Emoji, ignoriere.")
+            return "fehler"
+        try:
+            await nachricht.add_reaction(emoji)
+            return "emoji"
+        except Exception as e:
+            print(f"❌ Konnte Emoji-Reaktion nicht setzen: {e}")
+            return "fehler"
+
+    if typ == "reply":
+        if not inhalt:
+            return "fehler"
+        nachricht = hole_nachricht(channel_id, index) if index is not None else None
+        try:
+            if nachricht:
+                gesendet = await nachricht.reply(inhalt)
+            else:
+                # Referenzierte Nachricht nicht mehr auffindbar -> als
+                # normale Nachricht senden statt komplett zu verwerfen.
+                print(f"[protokoll] Channel {channel_id}: REPLY-Index {index} nicht gefunden, sende als normale Nachricht.")
+                gesendet = await channel.send(inhalt)
+        except Exception as e:
+            print(f"❌ Fehler beim Senden der Reply-Antwort: {e}")
+            return "fehler"
+        verlauf_eintrag_hinzufuegen(channel_id, gesendet.author.display_name, inhalt, message=gesendet)
+        return "reply"
+
+    # typ == "text"
+    if not inhalt:
+        return "fehler"
+    try:
+        gesendet = await channel.send(inhalt)
+    except Exception as e:
+        print(f"❌ Fehler beim Senden der Antwort: {e}")
+        return "fehler"
+    verlauf_eintrag_hinzufuegen(channel_id, gesendet.author.display_name, inhalt, message=gesendet)
+    return "text"
 
 # ─── GEMINI API AUFRUF (allgemein, für Chat-Antworten UND Stilanalyse) ───────
 # Nutzt den kostenlosen Gemini-API-Tier (kein Kreditkarte nötig).
@@ -235,7 +385,8 @@ async def frage_claude(channel_id: int, system_prompt: str, zwinge_antwort: bool
         return None
 
     verlauf_text = "\n".join(
-        f"{eintrag['autor']}: {eintrag['inhalt']}" for eintrag in nachrichten_verlauf
+        f"[{eintrag['index']}] {eintrag['autor']}: {eintrag['inhalt']}"
+        for eintrag in nachrichten_verlauf
     )
 
     hinweis = ""
@@ -243,14 +394,15 @@ async def frage_claude(channel_id: int, system_prompt: str, zwinge_antwort: bool
         hinweis = (
             "\n\n(Hinweis: Du hast die letzten Male nichts gesagt, obwohl "
             f"weiter geschrieben wurde. Antworte diesmal NICHT mit {SKIP_TOKEN} "
-            "sondern finde einen kurzen, lockeren Anschlusskommentar, selbst "
-            "wenn es nur eine knappe Reaktion ist.)"
+            "sondern finde einen kurzen, lockeren Anschlusskommentar oder "
+            "zumindest eine passende Emoji-Reaktion, selbst wenn es nur eine "
+            "knappe Reaktion ist.)"
         )
 
     user_content = (
-        "Hier ist der bisherige Chatverlauf im Discord-Channel "
-        "(Format: Name: Nachricht). Reagiere als nächster Beitrag "
-        "im Gespräch, so wie es gerade angebracht ist:\n\n"
+        "Hier ist der bisherige, durchnummerierte Chatverlauf im Discord-"
+        "Channel (Format: [Nummer] Name: Nachricht). Reagiere gemäß dem "
+        "Antwortformat aus deiner Systemanweisung:\n\n"
         f"{verlauf_text}{hinweis}"
     )
 
@@ -388,19 +540,6 @@ async def ist_reply_an_bot(message: discord.Message) -> bool:
             return False
     return getattr(resolved, "author", None) == bot.user
 
-async def sende_antwort(channel: discord.abc.Messageable, text: str, channel_id: int):
-    try:
-        gesendet = await channel.send(text)
-    except Exception as e:
-        print(f"❌ Fehler beim Senden der Antwort: {e}")
-        return
-    # Eigene Antwort auch ins Gedächtnis aufnehmen, damit der Bot sich selbst
-    # im weiteren Verlauf "erinnert" und nicht mehrfach dasselbe sagt.
-    verlauf[channel_id].append({
-        "autor": gesendet.author.display_name,
-        "inhalt": text,
-    })
-
 # ─── ON MESSAGE: SOFORT-REAKTION BEI ERWÄHNUNG/REPLY ─────────────────────────
 @bot.event
 async def on_message(message: discord.Message):
@@ -420,10 +559,7 @@ async def on_message(message: discord.Message):
     # vorhanden ist. Zusätzlich fließt sie in die Stil-Sammlung ein, damit der
     # Bot langfristig lernt, wie die Leute hier schreiben.
     if message.content:
-        verlauf[channel_id].append({
-            "autor": message.author.display_name,
-            "inhalt": message.content,
-        })
+        verlauf_eintrag_hinzufuegen(channel_id, message.author.display_name, message.content, message=message)
         stil_sammlung_erfassen(channel_id, message.author.display_name, message.content)
 
         if modus == "beobachtend":
@@ -464,11 +600,16 @@ async def on_message(message: discord.Message):
                 channel_id, data.get("system_prompt_direkt", DEFAULT_SYSTEM_PROMPT_DIREKT)
             )
 
-        if not antwort or antwort.strip().upper() == SKIP_TOKEN:
+        if not antwort:
+            return
+
+        typ, index, inhalt = parse_antwort(antwort)
+        ergebnis = await fuehre_antwort_aus(typ, index, inhalt, message.channel, channel_id)
+
+        if ergebnis == "skip":
             return
 
         letzte_direkt_antwort[channel_id] = datetime.now(timezone.utc)
-        await sende_antwort(message.channel, antwort, channel_id)
         # Direkte Antwort zählt auch als "gesehen" für den Beobachtungsmodus.
         ungesehene_seit_reaktion[channel_id] = 0
         naechste_pruefung[channel_id] = neues_beobachtungsfenster()
@@ -526,13 +667,19 @@ async def _beobachtungs_check_channel(channel_id, faellig_um, jetzt):
 
         if antwort is None:
             print(f"[beobachtung] Channel {channel_id}: keine Antwort von der API erhalten (siehe Fehler oben).")
-        elif antwort.strip().upper() == SKIP_TOKEN:
+            ergebnis = "fehler"
+        else:
+            typ, index, inhalt = parse_antwort(antwort)
+            ergebnis = await fuehre_antwort_aus(typ, index, inhalt, kanal, channel_id)
+
+        if ergebnis == "skip":
             skip_zaehler[channel_id] += 1
             print(f"[beobachtung] Channel {channel_id}: Modell hat {SKIP_TOKEN} gewählt (in Folge: {skip_zaehler[channel_id]}).")
-        else:
+        elif ergebnis in ("emoji", "reply", "text"):
             skip_zaehler[channel_id] = 0
-            print(f"[beobachtung] Channel {channel_id}: Antwort gesendet.")
-            await sende_antwort(kanal, antwort, channel_id)
+            print(f"[beobachtung] Channel {channel_id}: Reaktion vom Typ '{ergebnis}' ausgeführt.")
+        else:
+            print(f"[beobachtung] Channel {channel_id}: Antwort konnte nicht umgesetzt werden (Typ 'fehler').")
 
         ungesehene_seit_reaktion[channel_id] = 0
         naechste_pruefung[channel_id] = neues_beobachtungsfenster()
@@ -623,6 +770,8 @@ async def ki_status(interaction: discord.Interaction):
 async def ki_reset(interaction: discord.Interaction):
     cid = interaction.channel.id
     verlauf[cid].clear()
+    nachricht_lookup[cid].clear()
+    naechster_index[cid] = 0
     ungesehene_seit_reaktion[cid] = 0
     skip_zaehler[cid] = 0
     if channel_modus(cid) == "beobachtend":
