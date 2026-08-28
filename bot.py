@@ -13,8 +13,9 @@ from datetime import datetime, timedelta, timezone
 # ─── CONFIG ───────────────────────────────────────────────────────────────────
 TOKEN = os.environ.get("DISCORD_TOKEN")
 GUILD_ID = os.environ.get("GUILD_ID")
-ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
-ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001")
+# Kostenloser Gemini-API-Key von https://aistudio.google.com/apikey
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 
 DATA_DIR = "/data" if os.path.isdir("/data") else "."
 DATA_FILE = os.path.join(DATA_DIR, "ai_data.json")
@@ -179,45 +180,53 @@ def system_prompt_mit_stil(basis_prompt: str, channel_id: int) -> str:
         f"{profil}"
     )
 
-# ─── ANTHROPIC API AUFRUF (allgemein, für Chat-Antworten UND Stilanalyse) ────
+# ─── GEMINI API AUFRUF (allgemein, für Chat-Antworten UND Stilanalyse) ───────
+# Nutzt den kostenlosen Gemini-API-Tier (kein Kreditkarte nötig).
 async def rufe_claude_auf(system_prompt: str, user_content: str, max_tokens: int = 300) -> str | None:
-    if not ANTHROPIC_API_KEY:
-        print("⚠️ ANTHROPIC_API_KEY fehlt, kann keine Antwort generieren.")
+    if not GEMINI_API_KEY:
+        print("⚠️ GEMINI_API_KEY fehlt, kann keine Antwort generieren.")
         return None
 
+    url = (
+        f"https://generativelanguage.googleapis.com/v1beta/models/"
+        f"{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
+    )
     payload = {
-        "model": ANTHROPIC_MODEL,
-        "max_tokens": max_tokens,
-        "system": system_prompt,
-        "messages": [{"role": "user", "content": user_content}],
+        "system_instruction": {"parts": [{"text": system_prompt}]},
+        "contents": [{"role": "user", "parts": [{"text": user_content}]}],
+        "generationConfig": {"maxOutputTokens": max_tokens},
     }
-    headers = {
-        "x-api-key": ANTHROPIC_API_KEY,
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json",
-    }
+    headers = {"content-type": "application/json"}
 
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(
-                "https://api.anthropic.com/v1/messages",
+                url,
                 headers=headers,
                 json=payload,
                 timeout=aiohttp.ClientTimeout(total=30),
             ) as resp:
                 if resp.status != 200:
                     text = await resp.text()
-                    print(f"❌ Anthropic API Fehler {resp.status}: {text}")
+                    print(f"❌ Gemini API Fehler {resp.status}: {text}")
                     return None
                 result = await resp.json()
-                teile = [b["text"] for b in result.get("content", []) if b.get("type") == "text"]
+                kandidaten = result.get("candidates", [])
+                if not kandidaten:
+                    # z.B. durch Safety-Filter blockiert
+                    print(f"⚠️ Gemini lieferte keine Kandidaten zurück: {result}")
+                    return None
+                teile = [
+                    p.get("text", "")
+                    for p in kandidaten[0].get("content", {}).get("parts", [])
+                ]
                 antwort = "\n".join(teile).strip()
                 return antwort or None
     except asyncio.TimeoutError:
-        print("❌ Anthropic API Timeout")
+        print("❌ Gemini API Timeout")
         return None
     except Exception as e:
-        print(f"❌ Fehler beim Aufruf der Anthropic API: {e}")
+        print(f"❌ Fehler beim Aufruf der Gemini API: {e}")
         return None
 
 async def frage_claude(channel_id: int, system_prompt: str, zwinge_antwort: bool = False) -> str | None:
@@ -580,12 +589,12 @@ async def ki_status(interaction: discord.Interaction):
     if not data["channel_modi"]:
         await interaction.response.send_message(
             "Kein Channel konfiguriert – Standard ist überall **erwaehnung**.\n"
-            f"API-Key gesetzt: {'✅' if ANTHROPIC_API_KEY else '❌ FEHLT'}",
+            f"API-Key gesetzt: {'✅' if GEMINI_API_KEY else '❌ FEHLT'}",
             ephemeral=True
         )
         return
     jetzt = datetime.now(timezone.utc)
-    zeilen = [f"API-Key gesetzt: {'✅' if ANTHROPIC_API_KEY else '❌ FEHLT'}\n"]
+    zeilen = [f"API-Key gesetzt: {'✅' if GEMINI_API_KEY else '❌ FEHLT'}\n"]
     for cid_str, modus in data["channel_modi"].items():
         cid = int(cid_str)
         kanal = interaction.guild.get_channel(cid)
@@ -707,8 +716,8 @@ async def on_ready():
     except Exception as e:
         print(f"❌ FEHLER beim Sync: {e}")
 
-    if not ANTHROPIC_API_KEY:
-        print("⚠️⚠️⚠️ ACHTUNG: ANTHROPIC_API_KEY ist NICHT gesetzt – der Bot wird niemals eigenständig antworten können!")
+    if not GEMINI_API_KEY:
+        print("⚠️⚠️⚠️ ACHTUNG: GEMINI_API_KEY ist NICHT gesetzt – der Bot wird niemals eigenständig antworten können!")
 
     # Für bereits als "beobachtend" konfigurierte Channels beim (Neu-)Start
     # ein erstes Zeitfenster setzen, falls noch keins existiert.
